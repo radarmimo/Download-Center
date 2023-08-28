@@ -1,0 +1,45 @@
+Welcome to the GUI SISO Waveform Optimization Tool, designed to streamline waveform design using the Continuous Phase Constraint (CPM) and Discrete Phase Constraint (DPM) algorithms. This graphical user interface enables you to effortlessly generate optimized waveforms tailored to your specific requirements.
+
+Getting Started:
+
+Launch the GUI by executing the "mSISO.m" script in MATLAB.
+Choose either the CPM or DPM algorithm based on your optimization goals.
+Provide the initial sequence as input to kickstart the optimization process.
+Algorithm Selection:
+
+CPM (Continuous Phase Constraint): Optimize waveforms by minimizing Peak Sidelobe Level (PSL) or Integrated Sidelobe Level (ISL). Imposes a unimodular constraint for phase continuity.
+
+DPM (Discrete Phase Constraint): Optimal waveform selection from a predefined alphabet. Aims to minimize PSL or ISL while adhering to discrete phase values of the chosen alphabet.
+
+Using GUI SISO:
+
+Select Algorithm: Choose either CPM or DPM, depending on your waveform optimization needs.
+
+Input Sequence: Input the initial sequence that you wish to optimize. This sequence serves as the starting point for the optimization process.
+
+Additional Parameters: Set any algorithm-specific parameters such as optimization weights, alphabet choices, and related configurations.
+
+Run Optimization: Initiate the optimization process by clicking the "Run Optimization" button. The selected algorithm will be applied to the input sequence.
+
+Optimization Results: The GUI will display the optimized waveform, accompanied by relevant optimization metrics such as PSL, ISL, and more.
+
+Tips:
+
+To access GUI SISO, execute the "mSISO.m" script. Ensure all relevant files are present in the same directory.
+
+For in-depth algorithm explanations and code details, refer to 
+M. Alaee-Kerahroodi, A. Aubry, A. De Maio, M. M. Naghsh and M. Modarres-Hashemi, "A Coordinate-Descent Framework to Design Low PSL/ISL Sequences," in IEEE Transactions on Signal Processing, vol. 65, no. 22, pp. 5942-5956, 15 Nov.15, 2017, doi: 10.1109/TSP.2017.2723354. 
+
+
+Reach out to info@radarmimo.com for assistance, inquiries, or feedback.
+
+
+MIT License
+
+Copyright 2023 Mohammad Alaee
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
