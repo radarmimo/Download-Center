@@ -34,7 +34,7 @@ M. Alaee-Kerahroodi, A. Aubry, A. De Maio, M. M. Naghsh and M. Modarres-Hashemi,
 Reach out to info@radarmimo.com for assistance, inquiries, or feedback.
 
 
-MIT License
+License
 
 Copyright 2023 Mohammad Alaee
 
