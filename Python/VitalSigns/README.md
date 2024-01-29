@@ -29,3 +29,11 @@
 # % Website: https://radarmimo.com/
 # % Email: info@radarmimo.com, mohammad.alaee@uni.lu
 # % Code written by : Mohammad Alaee
+
+This example requires "radarsdk" from infineon be installed. This can be found from 
+https://softwaretools.infineon.com/tools/com.ifx.tb.tool.ifxradarsdk
+
+After installing "radarsdk", then "python_wheels" also is required to be installed.
+
+This code was tested with python 3.12
+
