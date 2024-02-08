@@ -45,14 +45,14 @@ from pyqtgraph.Qt import QtCore
 import sys
 from PyQt5.QtWidgets import QApplication, QGridLayout, \
     QLabel, QVBoxLayout, QWidget
-
+import time
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 from ifxradarsdk import get_version
 from ifxradarsdk.ltr11 import DeviceLtr11
 from ifxradarsdk.ltr11.types import Ltr11Config
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-prt_index = 1  # 0 = 4000 Hz,  1 = 2000 Hz, 2 = 1000 Hz, 3 = 500 Hz
+prt_index = 0  # 0 = 4000 Hz,  1 = 2000 Hz, 2 = 1000 Hz, 3 = 500 Hz
 if prt_index == 0:
     sample_rate = 4000
 elif prt_index == 1:
@@ -67,8 +67,16 @@ vital_signs_sample_rate = 50    # Hz
 nyquist_freq = 0.5 * vital_signs_sample_rate
 filter_order = vital_signs_sample_rate + 1
 buffer_time = 20  # second
+dds_threshold = vital_signs_sample_rate/10
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Initial time
+start_time_br = time.time()
+start_time_hr = time.time()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 buffer_data_dds_size = int(buffer_time * vital_signs_sample_rate)
+estimation_time = 2  # second
+index_second_br = buffer_data_dds_size - estimation_time * vital_signs_sample_rate
+index_second_hr = buffer_data_dds_size - estimation_time * vital_signs_sample_rate
 raw_data_size = int(buffer_time * sample_rate)
 num_rx_antennas = 1
 frame_counter = 0
@@ -86,19 +94,22 @@ EPS = 0.00000001
 data_queue = queue.Queue()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 FIGURE_UPDATE_TIME = 25  # m second
-PROCESSING_UPDATE_INTERVAL = 0.1  # second
+PROCESSING_UPDATE_INTERVAL = 0.05 # second
 FFT_SIZE_RAW_DATA = raw_data_size
 FFT_SIZE_VITAL_SIGNS = buffer_data_dds_size*4
 VITAL_SIGNS_ESTIMATION_LENGTH = buffer_time*vital_signs_sample_rate
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ENABLE_PHASE_UNWRAP_PLOT = True
 ENABLE_VITALSIGNS_SPECTRUM = True
+ENABLE_ESTIMATION_PLOT = True
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 x_axis_raw_data = np.linspace(0, buffer_time, raw_data_size)
 x_axis_phase_unwrap = np.linspace(0, buffer_time, buffer_data_dds_size)
 
 x_axisRawDataFFT = np.linspace(-sample_rate/2, sample_rate/2, FFT_SIZE_RAW_DATA)
 x_axisVitalSignsFFT = np.linspace(-vital_signs_sample_rate/2, vital_signs_sample_rate/2, FFT_SIZE_VITAL_SIGNS)
+x_axisVitalSignsEstimation = range(VITAL_SIGNS_ESTIMATION_LENGTH)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # data queue
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -149,6 +160,8 @@ class HeartBreathingWindow(QWidget):
         self.heart_rate_value.setText(str(heart_rate))
 
 def update_plots():
+    global breathing_rate_estimation_value, heart_rate_estimation_value, start_time_br, start_time_hr,\
+            breathing_rate_estimation_time_stamp, heart_rate_estimation_time_stamp
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # range profile plot
     if ENABLE_PHASE_UNWRAP_PLOT:
@@ -160,11 +173,14 @@ def update_plots():
         phase_unwrap_plots[4][0].setData(x_axis_phase_unwrap, np.real(buffer_data_dds))
         phase_unwrap_plots[5][0].setData(x_axis_phase_unwrap, np.imag(buffer_data_dds))
 
-        phase_unwrap_plots[6][0].setData(x_axis_phase_unwrap, wrapped_phase_plot*180/np.pi)
-        phase_unwrap_plots[7][0].setData(x_axis_phase_unwrap, unwrapped_phase_plot*180/np.pi)
+        phase_unwrap_plots[6][0].setData(x_axis_phase_unwrap, buffer_dds_envelop)
+        phase_unwrap_plots[7][0].setData(x_axis_phase_unwrap, threshold_dds_envelop)
 
-        phase_unwrap_plots[8][0].setData(x_axis_phase_unwrap[filter_order:], filtered_breathing_plot[filter_order:] * 180 / np.pi)
-        phase_unwrap_plots[9][0].setData(x_axis_phase_unwrap[filter_order:], filtered_heart_plot[filter_order:] * 180 / np.pi)
+        phase_unwrap_plots[8][0].setData(x_axis_phase_unwrap, wrapped_phase_plot*180/np.pi)
+        phase_unwrap_plots[9][0].setData(x_axis_phase_unwrap, unwrapped_phase_plot*180/np.pi)
+
+        phase_unwrap_plots[10][0].setData(x_axis_phase_unwrap[filter_order:], filtered_breathing_plot[filter_order:] * 180 / np.pi)
+        phase_unwrap_plots[11][0].setData(x_axis_phase_unwrap[filter_order:], filtered_heart_plot[filter_order:] * 180 / np.pi)
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # breathing fft plot
@@ -173,17 +189,59 @@ def update_plots():
         vital_signs_plots[1][0].setData(x_axisVitalSignsFFT, scipy.fft.fftshift(phase_unwrap_fft))
         vital_signs_plots[2][0].setData(x_axisVitalSignsFFT, scipy.fft.fftshift(breathing_fft))
         vital_signs_plots[3][0].setData(x_axisVitalSignsFFT, scipy.fft.fftshift(heart_fft))
-        if breathing_rate_estimation_index[-vital_signs_sample_rate] > 0:
-            xb = x_axisVitalSignsFFT[int(FFT_SIZE_VITAL_SIGNS/2+np.mean(breathing_rate_estimation_index[-vital_signs_sample_rate:]))]
-            yb = breathing_fft[int(np.mean(breathing_rate_estimation_index[-vital_signs_sample_rate:]))]
+        if breathing_rate_estimation_index[index_second_br] > 0:
+            xb = x_axisVitalSignsFFT[int(FFT_SIZE_VITAL_SIGNS/2+np.mean(breathing_rate_estimation_index[index_second_br:]))]
+            yb = breathing_fft[int(np.mean(breathing_rate_estimation_index[index_second_br:]))]
             vital_signs_plots[4][0].setData([xb], [yb])
             heart_breathing_window.set_breathing_rate(int(xb * 60))
-        if heart_rate_estimation_index[-vital_signs_sample_rate] > 0:
-            xh = x_axisVitalSignsFFT[int(FFT_SIZE_VITAL_SIGNS/2+np.mean(heart_rate_estimation_index[-vital_signs_sample_rate:]))]
-            yh = heart_fft[int(np.mean(heart_rate_estimation_index[-vital_signs_sample_rate:]))]
+        if heart_rate_estimation_index[index_second_hr] > 0:
+            xh = x_axisVitalSignsFFT[int(FFT_SIZE_VITAL_SIGNS/2+np.mean(heart_rate_estimation_index[index_second_hr:]))]
+            yh = heart_fft[int(np.mean(heart_rate_estimation_index[index_second_hr:]))]
             vital_signs_plots[5][0].setData([xh], [yh])
             heart_breathing_window.set_heart_rate(int(xh*60))
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    if ENABLE_ESTIMATION_PLOT:
+        if breathing_rate_estimation_index[index_second_br] > 0:
+            current_time_br = time.time()
+            time_passed_br = current_time_br - start_time_br
+            start_time_br = current_time_br
 
+            breathing_rate_estimation_time_stamp = np.roll(breathing_rate_estimation_time_stamp, -1)
+            breathing_rate_estimation_time_stamp[-1] = breathing_rate_estimation_time_stamp[-2] + time_passed_br
+
+            last_index_breathing_buffer_time = len(breathing_rate_estimation_time_stamp) - 1
+            last_index_br = np.searchsorted(breathing_rate_estimation_time_stamp[:last_index_breathing_buffer_time],
+                                            breathing_rate_estimation_time_stamp[
+                                                last_index_breathing_buffer_time] - buffer_time, side='right')
+
+
+            breathing_rate_estimation_value = np.roll(breathing_rate_estimation_value, -1)
+            xb = x_axisVitalSignsFFT[
+                int(FFT_SIZE_VITAL_SIGNS / 2 + np.mean(breathing_rate_estimation_index[index_second_br:]))]*60
+            breathing_rate_estimation_value[-1] = xb
+            estimation_plots[0][0].setData(breathing_rate_estimation_time_stamp[last_index_br:], breathing_rate_estimation_value[last_index_br:])
+
+        if heart_rate_estimation_index[index_second_hr] > 0:
+            heart_rate_estimation_value = np.roll(heart_rate_estimation_value, -1)
+            xh = x_axisVitalSignsFFT[
+                int(FFT_SIZE_VITAL_SIGNS / 2 + np.mean(heart_rate_estimation_index[index_second_hr:]))] * 60
+            heart_rate_estimation_value[-1] = xh
+
+            current_time_hr = time.time()
+            time_passed_hr = current_time_hr - start_time_hr
+            start_time_hr = current_time_hr
+
+            heart_rate_estimation_time_stamp = np.roll(heart_rate_estimation_time_stamp, -1)
+            heart_rate_estimation_time_stamp[-1] = heart_rate_estimation_time_stamp[-2] + time_passed_hr
+
+            last_index_heart_buffer_time = len(heart_rate_estimation_time_stamp) - 1
+            last_index_hr = np.searchsorted(heart_rate_estimation_time_stamp[:last_index_heart_buffer_time],
+                                            heart_rate_estimation_time_stamp[
+                                                last_index_heart_buffer_time] - buffer_time, side='right')
+
+            # print("indices_hr = ", indices_hr[-1])
+            estimation_plots[1][0].setData(heart_rate_estimation_time_stamp[last_index_hr:], heart_rate_estimation_value[last_index_hr:])
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # processing class
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -244,7 +302,8 @@ class RadarDataProcessor:
         global raw_data, filtered_raw_data, buffer_data_dds, wrapped_phase_plot, \
             unwrapped_phase_plot, filtered_breathing_plot, filtered_heart_plot, \
             buffer_dds_fft, phase_unwrap_fft, breathing_fft, heart_fft, \
-            breathing_rate_estimation_index, heart_rate_estimation_index
+            breathing_rate_estimation_index, heart_rate_estimation_index, \
+            buffer_dds_envelop
         counter = 0
         while True:
             if not data_queue.empty():
@@ -263,11 +322,22 @@ class RadarDataProcessor:
                     buffer_data_dds = np.roll(buffer_data_dds, -new_data_size)
                     buffer_data_dds[-new_data_size:] = new_data
 
+
+
                     counter += new_data_size
                     if counter > PROCESSING_UPDATE_INTERVAL * vital_signs_sample_rate:
                         counter = 0
 
+                        buffer_dds_envelop = lfilter(np.ones(vital_signs_sample_rate), 1, np.abs(buffer_data_dds))
+
                         wrapped_phase_plot = np.angle(buffer_data_dds)
+
+                        # Find indices where buffer_dds_envelop is less than dds_threshold
+                        indices_below_threshold = np.where(buffer_dds_envelop > dds_threshold)[0]
+
+                        # Set corresponding indices in buffer_data_dds to zero
+                        wrapped_phase_plot[indices_below_threshold] = 0
+
                         unwrapped_phase_plot = np.unwrap(wrapped_phase_plot)
                         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                         # read UI
@@ -312,6 +382,8 @@ def generate_phase_unwrap_plot(num_rx_antennas):
         ('khaki', 'Filtered Raw Data [Q]'),
         ('lightblue', 'DDS Data [I]'),
         ('gold', 'DDS Data [Q]'),
+        ('hotpink', 'Envelop'),
+        ('greenyellow', 'Threshold'),
         ('y', 'Wrapped Angle'),
         ('m', 'Phase Unwrap'),
         ('g', 'Breathing'),
@@ -388,6 +460,56 @@ if ENABLE_VITALSIGNS_SPECTRUM:
     vital_signs_spectrum_figure, vital_signs_plots,linear_region_breathing, linear_region_heart = generate_vitalsigns_spectrum_plot(num_rx_antennas, low_breathing, high_breathing, low_heart, high_heart)
     vital_signs_spectrum_figure.show()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+def generate_estimation_plot(num_rx_antennas):
+    plot = pg.plot(title='Vital Signs Estimation')
+    plot.showGrid(x=True, y=True)
+    plot.setLabel('bottom', 'Time [s]')
+    plot.setLabel('left', 'Rate [b.p.m.]')
+    plot.addLegend()
+    plots = [
+        ('g', 'Breathing'),
+        ('c', 'Heart')
+    ]
+    plot_objects = [[] for _ in range(len(plots))]
+    for i in range(num_rx_antennas):
+        for j, (color, name) in enumerate(plots):
+            # line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][i]}
+            if name == 'Breathing':
+                symbol_pen = pg.mkPen(None)  # No border for the symbol
+                symbol_brush = pg.mkBrush('g')  # Red color for the symbol
+                plot_obj = plot.plot(pen=None, symbol='s', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=8, name=f'{name} (Rx {i + 1})')
+            elif name == 'Mean Breathing':
+                symbol_pen = pg.mkPen(None)  # No border for the symbol
+                symbol_brush = pg.mkBrush('m')  # Red color for the symbol
+                plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=12, name=f'{name} (Rx {i + 1})')
+            elif name == 'Heart':
+                symbol_pen = pg.mkPen(None)  # No border for the symbol
+                symbol_brush = pg.mkBrush('c')  # Red color for the symbol
+                plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=8, name=f'{name} (Rx {i + 1})')
+            elif name == 'Mean Heart [Method 1]':
+                symbol_pen = pg.mkPen(None)  # No border for the symbol
+                symbol_brush = pg.mkBrush('c')  # Red color for the symbol
+                plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=12, name=f'{name} (Rx {i + 1})')
+            elif name == 'Heart [Method 2]':
+                symbol_pen = pg.mkPen(None)  # No border for the symbol
+                symbol_brush = pg.mkBrush('b')  # Red color for the symbol
+                plot_obj = plot.plot(pen=None, symbol='s', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=8, name=f'{name} (Rx {i + 1})')
+            elif name == 'Mean Heart [Method 2]':
+                symbol_pen = pg.mkPen(None)  # No border for the symbol
+                symbol_brush = pg.mkBrush('c')  # Red color for the symbol
+                plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=12, name=f'{name} (Rx {i + 1})')
+
+            # plot_obj = plot.plot(pen=line_style, name=f'{name} (Rx {i + 1})')
+            plot_obj.setVisible(False)
+            plot_objects[j].append(plot_obj)
+    plot_objects[0][0].setVisible(True)
+    plot_objects[1][0].setVisible(True)
+    return plot, plot_objects
+# Usage:
+if ENABLE_ESTIMATION_PLOT:
+    estimation_figure, estimation_plots = generate_estimation_plot(num_rx_antennas)
+    estimation_figure.show()
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 app = QApplication([])
@@ -443,6 +565,8 @@ if __name__ == "__main__":
         raw_data = np.zeros(raw_data_size, dtype=np.complex128)
         filtered_raw_data = np.zeros(raw_data_size, dtype=np.complex128)
         buffer_data_dds = np.zeros(buffer_data_dds_size, dtype=np.complex128)
+        buffer_dds_envelop = np.zeros(buffer_data_dds_size)
+        threshold_dds_envelop = np.ones(buffer_data_dds_size) * dds_threshold
         wrapped_phase_plot = np.zeros(buffer_data_dds_size)
         unwrapped_phase_plot = np.zeros(buffer_data_dds_size)
         filtered_breathing_plot = np.zeros(buffer_data_dds_size)
@@ -455,7 +579,14 @@ if __name__ == "__main__":
 
         breathing_rate_estimation_index = np.zeros(VITAL_SIGNS_ESTIMATION_LENGTH)
         heart_rate_estimation_index = np.zeros(VITAL_SIGNS_ESTIMATION_LENGTH)
+        breathing_rate_estimation_value = np.zeros(VITAL_SIGNS_ESTIMATION_LENGTH)
+        heart_rate_estimation_value = np.zeros(VITAL_SIGNS_ESTIMATION_LENGTH)
+        breathing_rate_estimation_time_stamp = np.zeros(VITAL_SIGNS_ESTIMATION_LENGTH)
+        heart_rate_estimation_time_stamp = np.zeros(VITAL_SIGNS_ESTIMATION_LENGTH)
 
+
+        breathing_rate_mean_values = np.zeros(buffer_time)
+        heart_rate_mean_values = np.zeros(buffer_time)
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # Threads for reading data and processing
