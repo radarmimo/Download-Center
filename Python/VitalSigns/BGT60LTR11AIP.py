@@ -53,13 +53,14 @@ from ifxradarsdk.ltr11 import DeviceLtr11
 from ifxradarsdk.ltr11.types import Ltr11Config
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ENABLE_NEULOG = True
-neulog_sensors = neulog.Device(port="COM18")
-res_connect = neulog_sensors.connect()
-if not neulog_sensors.connect():
-    print("Neulog sensors connection failed")
-    ENABLE_NEULOG = False
-else:
-    print("connected to neulog sensors", neulog_sensors)
+if ENABLE_NEULOG:
+    neulog_sensors = neulog.Device(port="COM18")
+    res_connect = neulog_sensors.connect()
+    if not neulog_sensors.connect():
+        print("Neulog sensors connection failed")
+        ENABLE_NEULOG = False
+    else:
+        print("connected to neulog sensors", neulog_sensors)
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 prt_index = 0  # 0 = 4000 Hz,  1 = 2000 Hz, 2 = 1000 Hz, 3 = 500 Hz
