@@ -36,7 +36,6 @@ import pprint
 import numpy as np
 import threading
 import queue
-import scipy.fft
 import scipy.signal as signal
 from scipy.signal import lfilter, firwin, find_peaks, filtfilt
 import pyqtgraph as pg
@@ -61,7 +60,6 @@ if ENABLE_NEULOG:
         ENABLE_NEULOG = False
     else:
         print("connected to neulog sensors", neulog_sensors)
-
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 prt_index = 0  # 0 = 4000 Hz,  1 = 2000 Hz, 2 = 1000 Hz, 3 = 500 Hz
 if prt_index == 0:
@@ -99,8 +97,6 @@ fft_size_raw_data = raw_data_size
 fft_size_vital_signs = buffer_data_dds_size * 4
 estimation_size_vital_signs = buffer_time*estimation_rate
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# estimation_index_breathing = buffer_data_dds_size - estimation_time * vital_signs_sample_rate
-# estimation_index_heart = buffer_data_dds_size - estimation_time * vital_signs_sample_rate
 estimation_index_breathing = estimation_size_vital_signs - estimation_time * estimation_rate
 estimation_index_heart = estimation_size_vital_signs - estimation_time * estimation_rate
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -113,6 +109,12 @@ low_heart = 0.85
 high_heart = 4
 nyquist_freq = 0.5 * vital_signs_sample_rate
 filter_order = vital_signs_sample_rate + 1
+breathing_b = firwin(filter_order, [low_breathing/nyquist_freq, high_breathing/nyquist_freq],pass_zero=False)
+heart_b = firwin(filter_order, [low_heart/nyquist_freq, high_heart/nyquist_freq],pass_zero=False)
+index_start_breathing = int(low_breathing/vital_signs_sample_rate * fft_size_vital_signs)
+index_end_breathing = int(high_breathing/vital_signs_sample_rate * fft_size_vital_signs)
+index_start_heart = int(low_heart/vital_signs_sample_rate * fft_size_vital_signs)
+index_end_heart = int(high_heart/vital_signs_sample_rate * fft_size_vital_signs)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # peak detection
 peak_finding_distance = 0.01
@@ -164,14 +166,11 @@ def read_data(device):
         for frame in frame_contents:
             data_queue.put(frame)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 def read_neulog(device):
     global neulog_start_time_respiration, neulog_respiration_values, neulog_respiration_time_stamp, \
         neulog_pulse_time_stamp, neulog_pulse_values, neulog_start_time_pulse
     time_test = 0
-    sample_counter = 0
     while True:
         respiration_value = float(device.getSensorsData('Respiration', 1))
         neulog_respiration_values = np.roll(neulog_respiration_values, -1)
@@ -183,11 +182,6 @@ def read_neulog(device):
         neulog_respiration_time_stamp[-1] = neulog_respiration_time_stamp[-2] + time_passed_respiration
         neulog_start_time_respiration = current_respiration_time
         time_test = time_passed_respiration + time_test
-        sample_counter += 1
-        # if time_test > 100:
-        #     print("time_passed_respiration = ", time_test)
-        #     print("sample_counter = ", sample_counter)
-
         pulse_value = float(device.getSensorsData('Pulse', 1))
         neulog_pulse_values = np.roll(neulog_pulse_values, -1)
         neulog_pulse_values[-1] = pulse_value
@@ -302,7 +296,6 @@ class HeartBreathingWindow(QWidget):
     def set_respiration_rate(self, respiration_rate):
         self.respiration_rate_value.setText(str(respiration_rate))
 
-
 def update_plots():
     global breathing_rate_estimation_value, heart_rate_estimation_value, start_time_br, start_time_hr,\
             breathing_rate_estimation_time_stamp, heart_rate_estimation_time_stamp
@@ -335,10 +328,10 @@ def update_plots():
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # breathing fft plot
     if ENABLE_VITALSIGNS_SPECTRUM:
-        vital_signs_plots[0][0].setData(x_axis_vital_signs_spectrum, scipy.fft.fftshift(buffer_dds_fft))
-        vital_signs_plots[1][0].setData(x_axis_vital_signs_spectrum, scipy.fft.fftshift(phase_unwrap_fft))
-        vital_signs_plots[2][0].setData(x_axis_vital_signs_spectrum, scipy.fft.fftshift(breathing_fft))
-        vital_signs_plots[3][0].setData(x_axis_vital_signs_spectrum, scipy.fft.fftshift(heart_fft))
+        vital_signs_plots[0][0].setData(x_axis_vital_signs_spectrum, np.fft.fftshift(buffer_dds_fft))
+        vital_signs_plots[1][0].setData(x_axis_vital_signs_spectrum, np.fft.fftshift(phase_unwrap_fft))
+        vital_signs_plots[2][0].setData(x_axis_vital_signs_spectrum, np.fft.fftshift(breathing_fft))
+        vital_signs_plots[3][0].setData(x_axis_vital_signs_spectrum, np.fft.fftshift(heart_fft))
         if breathing_rate_estimation_index[estimation_index_breathing] > 0:
             xb = x_axis_vital_signs_spectrum[int(fft_size_vital_signs/2+np.mean(breathing_rate_estimation_index[estimation_index_breathing:]))]
             yb = breathing_fft[int(np.mean(breathing_rate_estimation_index[estimation_index_breathing:]))]
@@ -350,8 +343,8 @@ def update_plots():
             vital_signs_plots[5][0].setData([xh], [yh])
             heart_breathing_window.set_heart_rate(int(xh*60))
         if ENABLE_NEULOG:
-            vital_signs_plots[6][0].setData(neulog_x_axis_respiration_spectrum, scipy.fft.fftshift(neulog_respiration_fft))
-            vital_signs_plots[7][0].setData(neulog_x_axis_pulse_spectrum, scipy.fft.fftshift(neulog_pulse_fft))
+            vital_signs_plots[6][0].setData(neulog_x_axis_respiration_spectrum, np.fft.fftshift(neulog_respiration_fft))
+            vital_signs_plots[7][0].setData(neulog_x_axis_pulse_spectrum, np.fft.fftshift(neulog_pulse_fft))
             if neulog_respiration_peak_index[-1] > 0:
                 xr = neulog_x_axis_respiration_spectrum[int(neulog_respiration_peak_index[-1]+neulog_fft_size_respiration/2)]
                 yr = neulog_respiration_fft[int(neulog_respiration_peak_index[-1])]
@@ -363,7 +356,6 @@ def update_plots():
                 yp = neulog_pulse_fft[int(neulog_pulse_peak_index[-1])]
                 vital_signs_plots[9][0].setData([xp], [yp])
                 heart_breathing_window.set_pulse_rate(int(xp * 60))
-
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     if ENABLE_ESTIMATION_PLOT:
@@ -380,14 +372,11 @@ def update_plots():
                                             breathing_rate_estimation_time_stamp[
                                                 last_index_breathing_buffer_time] - buffer_time, side='right')
 
-
             breathing_rate_estimation_value = np.roll(breathing_rate_estimation_value, -1)
             xb = x_axis_vital_signs_spectrum[
                 int(fft_size_vital_signs / 2 + np.mean(breathing_rate_estimation_index[estimation_index_breathing:]))]*60
             breathing_rate_estimation_value[-1] = xb
             estimation_plots[0][0].setData(breathing_rate_estimation_time_stamp[last_index_br:], breathing_rate_estimation_value[last_index_br:])
-
-
 
         if heart_rate_estimation_index[estimation_index_heart] > 0:
             heart_rate_estimation_value = np.roll(heart_rate_estimation_value, -1)
@@ -407,7 +396,6 @@ def update_plots():
                                             heart_rate_estimation_time_stamp[
                                                 last_index_heart_buffer_time] - buffer_time, side='right')
 
-            # print("indices_hr = ", indices_hr[-1])
             estimation_plots[1][0].setData(heart_rate_estimation_time_stamp[last_index_hr:],
                                            heart_rate_estimation_value[last_index_hr:])
         if ENABLE_NEULOG:
@@ -434,40 +422,6 @@ class RadarDataProcessor:
             best_peak_index = np.argmax(signal_region[filtered_peaks])
             rate_index = filtered_peaks[best_peak_index] + index_start
         return rate_index
-
-    def read_ui_inetrvals(self):
-        if ENABLE_VITALSIGNS_SPECTRUM:
-            interval_breathing = linear_region_breathing.getRegion()
-            freq1_breathing = interval_breathing[0]
-            freq2_breathing = interval_breathing[1]
-            low_freq_breathing = min(freq1_breathing, freq2_breathing) / nyquist_freq
-            high_freq_breathing = max(freq1_breathing, freq2_breathing) / nyquist_freq
-
-            interval_heart = linear_region_heart.getRegion()
-            freq1_heart = interval_heart[0]
-            freq2_heart = interval_heart[1]
-            low_freq_heart = min(freq1_heart, freq2_heart) / nyquist_freq
-            high_freq_heart = max(freq1_heart, freq2_heart) / nyquist_freq
-        else:
-            low_freq_breathing = low_breathing / nyquist_freq
-            high_freq_breathing = high_breathing / nyquist_freq
-            low_freq_heart = low_heart / nyquist_freq
-            high_freq_heart = high_heart / nyquist_freq
-
-        breathing_b = firwin(filter_order, [low_freq_breathing, high_freq_breathing],
-                             pass_zero=False)
-        breathing_a = 1
-
-        heart_b = firwin(filter_order, [low_freq_heart, high_freq_heart],
-                                 pass_zero=False)
-
-        heart_a = 1
-
-        index_start_breathing = int(low_freq_breathing * fft_size_vital_signs/2)
-        index_end_breathing = int(high_freq_breathing * fft_size_vital_signs / 2)
-        index_start_heart = int(low_freq_heart * fft_size_vital_signs/2)
-        index_end_heart = int(high_freq_heart * fft_size_vital_signs / 2)
-        return (breathing_b, breathing_a, heart_b, heart_a,index_start_breathing,index_end_breathing,index_start_heart,index_end_heart)
     def vital_signs_fft(self,data,nFFT,data_length):
         windowed_signal = np.multiply(data, signal.windows.blackmanharris(data_length))
         zp2 = np.zeros(nFFT, dtype=np.complex128)
@@ -481,7 +435,8 @@ class RadarDataProcessor:
             breathing_rate_estimation_index, heart_rate_estimation_index, \
             buffer_dds_envelop,x_axis_raw_data,x_axis_phase_unwrap, \
             neulog_respiration_fft, neulog_respiration_peak_index, \
-            neulog_pulse_fft, neulog_pulse_peak_index
+            neulog_pulse_fft, neulog_pulse_peak_index, breathing_b, heart_b, index_start_heart, index_end_heart, \
+            index_end_breathing, index_end_breathing
 
         counter = 0
         while True:
@@ -523,12 +478,9 @@ class RadarDataProcessor:
 
                         unwrapped_phase_plot = np.unwrap(wrapped_phase_plot)
                         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        # read UI
-                        (breathing_b, breathing_a, heart_b, heart_a,index_start_breathing,index_end_breathing,
-                         index_start_heart,index_end_heart) = self.read_ui_inetrvals()
                         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        filtered_breathing_plot = lfilter(breathing_b, breathing_a, unwrapped_phase_plot)
-                        filtered_heart_plot = lfilter(heart_b, heart_a, unwrapped_phase_plot)
+                        filtered_breathing_plot = lfilter(breathing_b, 1, unwrapped_phase_plot)
+                        filtered_heart_plot = lfilter(heart_b, 1, unwrapped_phase_plot)
                         #
                         buffer_dds_fft = self.vital_signs_fft(buffer_data_dds, fft_size_vital_signs,
                                                                 buffer_data_dds_size)
@@ -619,7 +571,9 @@ if ENABLE_PHASE_UNWRAP_PLOT:
     phase_unwrap_figure, phase_unwrap_plots = generate_phase_unwrap_plot(num_rx_antennas)
     phase_unwrap_figure.show()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-def generate_vitalsigns_spectrum_plot(num_rx_antennas, low_breathing, high_breathing, low_heart, high_heart):
+def generate_vitalsigns_spectrum_plot(num_rx_antennas):
+    global low_breathing, high_breathing, low_heart, high_heart, breathing_b, heart_b, \
+        index_start_breathing, index_end_breathing, index_start_heart, index_end_heart
     plot = pg.plot(title='Vital Signs Spectrum')
     plot.showGrid(x=True, y=True)
     plot.setLabel('bottom', 'Frequency [Hz]')
@@ -675,15 +629,39 @@ def generate_vitalsigns_spectrum_plot(num_rx_antennas, low_breathing, high_breat
 
     linear_region_breathing = pg.LinearRegionItem([low_breathing, high_breathing], brush=(255, 255, 0, 20))
     plot.addItem(linear_region_breathing, 'Breathing Linear Region')
+    def linear_region_breathing_changed():
+        global low_breathing, high_breathing, breathing_b,index_start_breathing,index_end_breathing
+        region = linear_region_breathing.getRegion()
+        if (region[0] < vital_signs_sample_rate / 4 and region[1] < vital_signs_sample_rate / 2 and
+                region[0] > 0 and region[1] > 0):
+            low_breathing = region[0]
+            high_breathing = region[1]
+            breathing_b = firwin(filter_order, [low_breathing / nyquist_freq, high_breathing / nyquist_freq],
+                                 pass_zero=False)
+            index_start_breathing = int(low_breathing / vital_signs_sample_rate * fft_size_vital_signs)
+            index_end_breathing = int(high_breathing / vital_signs_sample_rate * fft_size_vital_signs)
+
+    linear_region_breathing.sigRegionChanged.connect(linear_region_breathing_changed)
 
     linear_region_heart = pg.LinearRegionItem([low_heart, high_heart], brush=(255, 255, 0, 20))
     plot.addItem(linear_region_heart)
+    def linear_region_heart_changed():
+        global low_heart, high_heart, heart_b, index_start_heart, index_end_heart
+        region = linear_region_heart.getRegion()
+        if (region[0] < vital_signs_sample_rate / 4 and region[1] < vital_signs_sample_rate / 2 and
+                region[0] > 0 and region[1] > 0):
+            low_heart = region[0]
+            high_heart = region[1]
+            heart_b = firwin(filter_order, [low_heart / nyquist_freq, high_heart / nyquist_freq], pass_zero=False)
+            index_start_heart = int(low_heart / vital_signs_sample_rate * fft_size_vital_signs)
+            index_end_heart = int(high_heart / vital_signs_sample_rate * fft_size_vital_signs)
+    linear_region_heart.sigRegionChanged.connect(linear_region_heart_changed)
     plot.setXRange(low_breathing , high_heart + 0.5)
-    return plot, plot_objects, linear_region_breathing, linear_region_heart
+    return plot, plot_objects
 
 # Usage:
 if ENABLE_VITALSIGNS_SPECTRUM:
-    vital_signs_spectrum_figure, vital_signs_plots,linear_region_breathing, linear_region_heart = generate_vitalsigns_spectrum_plot(num_rx_antennas, low_breathing, high_breathing, low_heart, high_heart)
+    vital_signs_spectrum_figure, vital_signs_plots = generate_vitalsigns_spectrum_plot(num_rx_antennas)
     vital_signs_spectrum_figure.show()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 def generate_estimation_plot(num_rx_antennas):
@@ -701,7 +679,7 @@ def generate_estimation_plot(num_rx_antennas):
     plot_objects = [[] for _ in range(len(plots))]
     for i in range(num_rx_antennas):
         for j, (color, name) in enumerate(plots):
-            # line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][i]}
+            line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][i]}
             if name == 'Breathing':
                 symbol_pen = pg.mkPen(None)  # No border for the symbol
                 symbol_brush = pg.mkBrush('g')  # Red color for the symbol
@@ -718,9 +696,8 @@ def generate_estimation_plot(num_rx_antennas):
                 symbol_pen = pg.mkPen(None)  # No border for the symbol
                 symbol_brush = pg.mkBrush('skyblue')  # Red color for the symbol
                 plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=12, name=f'{name}')
-
-
-            # plot_obj = plot.plot(pen=line_style, name=f'{name} (Rx {i + 1})')
+            else:
+                plot_obj = plot.plot(pen=line_style, name=f'{name} (Rx {i + 1})')
             plot_obj.setVisible(True)
             plot_objects[j].append(plot_obj)
     # plot_objects[0][0].setVisible(True)
@@ -730,7 +707,6 @@ def generate_estimation_plot(num_rx_antennas):
 if ENABLE_ESTIMATION_PLOT:
     estimation_figure, estimation_plots = generate_estimation_plot(num_rx_antennas)
     estimation_figure.show()
-
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 app = QApplication([])
@@ -779,6 +755,7 @@ if __name__ == "__main__":
         device.set_config(config)
 
         pp.pprint(device.get_config())
+        print('vital_signs_sample_rate = ', vital_signs_sample_rate, 'Hz')
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # initialization
@@ -819,9 +796,6 @@ if __name__ == "__main__":
         neulog_pulse_fft = np.zeros(neulog_fft_size_pulse)
         neulog_pulse_peak_index = np.zeros(neulog_estimation_size_pulse)
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-        breathing_rate_mean_values = np.zeros(buffer_time)
-        heart_rate_mean_values = np.zeros(buffer_time)
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # Threads for reading data and processing
