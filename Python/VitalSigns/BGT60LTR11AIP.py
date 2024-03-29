@@ -29,7 +29,6 @@
 # % Website: https://radarmimo.com/
 # % Email: info@radarmimo.com, mohammad.alaee@uni.lu
 # % Code written by : Mohammad Alaee
-# % Update : 27th January 2024
 # % ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 import pprint
@@ -38,6 +37,7 @@ import threading
 import queue
 import scipy.signal as signal
 from scipy.signal import lfilter, firwin, find_peaks, filtfilt
+from scipy.ndimage import uniform_filter1d
 import pyqtgraph as pg
 from PyQt5.QtCore import QTimer
 from pyqtgraph.Qt import QtCore
@@ -46,6 +46,7 @@ from PyQt5.QtWidgets import QApplication, QGridLayout, \
     QLabel, QVBoxLayout, QWidget, QFrame
 import time
 from neulog import neulog
+import statsmodels.api as sm
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 from ifxradarsdk import get_version
 from ifxradarsdk.ltr11 import DeviceLtr11
@@ -72,13 +73,11 @@ else:
     sample_rate = 500
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 processing_window_time = 20  # second
-buffer_time = 6 * processing_window_time  # second
-estimation_time = 2  # second
+buffer_time = 5 * processing_window_time  # second
+estimation_time = 5  # second
 time_offset_synch_plots = 1.0  # second
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 figure_update_time = 25  # m second
-processing_update_interval = 0.00  # second
-estimation_rate = 8  # Hz
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ENABLE_PHASE_UNWRAP_PLOT = True
 ENABLE_VITALSIGNS_SPECTRUM = True
@@ -86,7 +85,7 @@ ENABLE_ESTIMATION_PLOT = True
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 num_rx_antennas = 1
-rate_index = 80
+rate_index = 200
 num_of_samples = int(3 * rate_index)
 samples_time = num_of_samples/sample_rate
 vital_signs_sample_rate = int(sample_rate/rate_index)    # Hz
@@ -96,10 +95,11 @@ buffer_data_size = int(buffer_time * vital_signs_sample_rate)
 processing_data_size = int(processing_window_time * vital_signs_sample_rate)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 fft_size_vital_signs = processing_data_size*4
+estimation_rate = vital_signs_sample_rate  # Hz
 estimation_size_vital_signs = buffer_time*estimation_rate
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-estimation_index_breathing = estimation_size_vital_signs - estimation_time * estimation_rate
-estimation_index_heart = estimation_size_vital_signs - estimation_time * estimation_rate
+estimation_index_breathing = buffer_data_size - estimation_time * estimation_rate
+estimation_index_heart = buffer_data_size - estimation_time * estimation_rate
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # filter initial coefficients
 # Calculate normalized cutoff frequencies for breathing
@@ -122,9 +122,7 @@ peak_finding_distance = 0.01
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # plots
-x_axis_phase_unwrap = np.linspace(time_offset_synch_plots, buffer_time+time_offset_synch_plots, buffer_data_size)
 x_axis_vital_signs_spectrum = np.linspace(-vital_signs_sample_rate/2, vital_signs_sample_rate/2, fft_size_vital_signs)
-x_axis_vital_signs_estimation = range(estimation_size_vital_signs)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -132,14 +130,13 @@ frame_counter = 0
 data_queue = queue.Queue()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Initial time
-start_time_br = time.time()
-start_time_hr = start_time_br
-current_time_data_queue = start_time_br
+# Initial time
+start_time = time.time()
+neulog_start_time = start_time
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # neulog
-neulog_respiration_sample_rate = 8     # Hz
-neulog_start_time_respiration = start_time_br
+neulog_respiration_sample_rate = 10     # Hz
 neulog_estimation_size_respiration = buffer_time*neulog_respiration_sample_rate
 neulog_processing_size_respiration = processing_window_time*neulog_respiration_sample_rate
 neulog_fft_size_respiration = neulog_processing_size_respiration*4
@@ -147,8 +144,7 @@ neulog_first_index_respiration = int(low_breathing/neulog_respiration_sample_rat
 neulog_last_index_respiration = int(high_breathing/neulog_respiration_sample_rate * neulog_fft_size_respiration)
 neulog_x_axis_respiration_spectrum = np.linspace(-neulog_respiration_sample_rate/2, neulog_respiration_sample_rate/2, neulog_fft_size_respiration)
 
-neulog_pulse_sample_rate = 8     # Hz
-neulog_start_time_pulse = start_time_br
+neulog_pulse_sample_rate = 10     # Hz
 neulog_estimation_size_pulse = buffer_time*neulog_pulse_sample_rate
 neulog_processing_size_pulse = processing_window_time*neulog_pulse_sample_rate
 neulog_fft_size_pulse = neulog_processing_size_pulse*4
@@ -169,30 +165,27 @@ def read_data(device):
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 def read_neulog(device):
-    global neulog_start_time_respiration, neulog_respiration_values, neulog_respiration_time_stamp, \
-        neulog_pulse_time_stamp, neulog_pulse_values, neulog_start_time_pulse
+    global neulog_start_time, neulog_respiration_values, neulog_time_stamp, \
+        neulog_pulse_values
     time_test = 0
+    sample_counter = 0
     while True:
+        time.sleep(1 / (2 * neulog_pulse_sample_rate))
+        # if window.data_port_connected:
         respiration_value = float(device.getSensorsData('Respiration', 1))
         neulog_respiration_values = np.roll(neulog_respiration_values, -1)
         neulog_respiration_values[-1] = respiration_value
 
         current_respiration_time = time.time()
-        time_passed_respiration = current_respiration_time - neulog_start_time_respiration
-        neulog_respiration_time_stamp = np.roll(neulog_respiration_time_stamp, -1)
-        neulog_respiration_time_stamp[-1] = neulog_respiration_time_stamp[-2] + time_passed_respiration
-        neulog_start_time_respiration = current_respiration_time
-        time_test = time_passed_respiration + time_test
+        time_passed_neulog = current_respiration_time - neulog_start_time
+        neulog_time_stamp = np.roll(neulog_time_stamp, -1)
+        neulog_time_stamp[-1] = neulog_time_stamp[-2] + time_passed_neulog
+        neulog_start_time = current_respiration_time
+        time_test = time_passed_neulog + time_test
+        sample_counter += 1
         pulse_value = float(device.getSensorsData('Pulse', 1))
         neulog_pulse_values = np.roll(neulog_pulse_values, -1)
         neulog_pulse_values[-1] = pulse_value
-
-        current_pulse_time = time.time()
-        time_passed_pulse = current_pulse_time - neulog_start_time_pulse
-        neulog_pulse_time_stamp = np.roll(neulog_pulse_time_stamp, -1)
-        neulog_pulse_time_stamp[-1] = neulog_pulse_time_stamp[-2] + time_passed_pulse
-        neulog_start_time_pulse = current_pulse_time
-
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # UI class
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -298,22 +291,22 @@ class HeartBreathingWindow(QWidget):
         self.respiration_rate_value.setText(str(respiration_rate))
 
 def update_plots():
-    global breathing_rate_estimation_value, heart_rate_estimation_value, start_time_br, start_time_hr,\
+    global breathing_rate_estimation_value, heart_rate_estimation_value, \
             breathing_rate_estimation_time_stamp, heart_rate_estimation_time_stamp
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # range profile plot
     if ENABLE_PHASE_UNWRAP_PLOT:
-        phase_unwrap_plots[0][0].setData(x_axis_phase_unwrap-buffer_time, np.real(buffer_data_dds))
-        phase_unwrap_plots[1][0].setData(x_axis_phase_unwrap-buffer_time, np.imag(buffer_data_dds))
-        phase_unwrap_plots[2][0].setData(x_axis_phase_unwrap-buffer_time, I_Q_envelop)
-        phase_unwrap_plots[3][0].setData(x_axis_phase_unwrap-buffer_time, wrapped_phase_plot*180/np.pi)
-        phase_unwrap_plots[4][0].setData(x_axis_phase_unwrap-buffer_time, unwrapped_phase_plot*180/np.pi)
-        phase_unwrap_plots[5][0].setData(x_axis_phase_unwrap[filter_order:]-buffer_time, filtered_breathing_plot[filter_order:] * 180 / np.pi)
-        phase_unwrap_plots[6][0].setData(x_axis_phase_unwrap[filter_order:]-buffer_time, filtered_heart_plot[filter_order:] * 180 / np.pi)
+        phase_unwrap_plots[0][0].setData(radar_time_stamp, np.real(buffer_data_dds))
+        phase_unwrap_plots[1][0].setData(radar_time_stamp, np.imag(buffer_data_dds))
+        phase_unwrap_plots[2][0].setData(radar_time_stamp, I_Q_envelop)
+        phase_unwrap_plots[3][0].setData(radar_time_stamp, wrapped_phase_plot*180/np.pi)
+        phase_unwrap_plots[4][0].setData(radar_time_stamp, unwrapped_phase_plot*180/np.pi)
+        phase_unwrap_plots[5][0].setData(radar_time_stamp, filtered_breathing_plot * 180 / np.pi)
+        phase_unwrap_plots[6][0].setData(radar_time_stamp, filtered_heart_plot * 180 / np.pi)
         if ENABLE_NEULOG:
-            phase_unwrap_plots[7][0].setData(neulog_respiration_time_stamp-buffer_time,
+            phase_unwrap_plots[7][0].setData(neulog_time_stamp,
                                               neulog_respiration_values - np.mean(neulog_respiration_values))
-            phase_unwrap_plots[8][0].setData(neulog_pulse_time_stamp-buffer_time,
+            phase_unwrap_plots[8][0].setData(neulog_time_stamp,
                                               neulog_pulse_values - np.mean(neulog_pulse_values))
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -327,12 +320,12 @@ def update_plots():
             xb = x_axis_vital_signs_spectrum[int(fft_size_vital_signs/2+np.mean(breathing_rate_estimation_index[estimation_index_breathing:]))]
             yb = breathing_fft[int(np.mean(breathing_rate_estimation_index[estimation_index_breathing:]))]
             vital_signs_plots[4][0].setData([xb], [yb])
-            heart_breathing_window.set_breathing_rate(int(xb * 60))
+            heart_breathing_window.set_breathing_rate(round(xb * 60) )
         if heart_rate_estimation_index[estimation_index_heart] > 0:
             xh = x_axis_vital_signs_spectrum[int(fft_size_vital_signs/2+np.mean(heart_rate_estimation_index[estimation_index_heart:]))]
             yh = heart_fft[int(np.mean(heart_rate_estimation_index[estimation_index_heart:]))]
             vital_signs_plots[5][0].setData([xh], [yh])
-            heart_breathing_window.set_heart_rate(int(xh*60))
+            heart_breathing_window.set_heart_rate(round(xh*60) )
         if ENABLE_NEULOG:
             vital_signs_plots[6][0].setData(neulog_x_axis_respiration_spectrum, np.fft.fftshift(neulog_respiration_fft))
             vital_signs_plots[7][0].setData(neulog_x_axis_pulse_spectrum, np.fft.fftshift(neulog_pulse_fft))
@@ -340,63 +333,38 @@ def update_plots():
                 xr = neulog_x_axis_respiration_spectrum[int(neulog_respiration_peak_index[-1]+neulog_fft_size_respiration/2)]
                 yr = neulog_respiration_fft[int(neulog_respiration_peak_index[-1])]
                 vital_signs_plots[8][0].setData([xr], [yr])
-                heart_breathing_window.set_respiration_rate(int(xr * 60))
-
+                heart_breathing_window.set_respiration_rate(round(xr * 60))
             if neulog_pulse_peak_index[-1] > 0:
                 xp = neulog_x_axis_pulse_spectrum[int(neulog_pulse_peak_index[-1]+neulog_fft_size_pulse/2)]
                 yp = neulog_pulse_fft[int(neulog_pulse_peak_index[-1])]
                 vital_signs_plots[9][0].setData([xp], [yp])
-                heart_breathing_window.set_pulse_rate(int(xp * 60))
+                heart_breathing_window.set_pulse_rate(round(xp * 60))
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     if ENABLE_ESTIMATION_PLOT:
+        global breathing_rate_estimation_value, heart_rate_estimation_value
         if breathing_rate_estimation_index[estimation_index_breathing] > 0:
-            current_time_br = time.time()
-            time_passed_br = current_time_br - start_time_br
-            start_time_br = current_time_br
-
-            breathing_rate_estimation_time_stamp = np.roll(breathing_rate_estimation_time_stamp, -1)
-            breathing_rate_estimation_time_stamp[-1] = breathing_rate_estimation_time_stamp[-2] + time_passed_br
-
-            last_index_breathing_buffer_time = len(breathing_rate_estimation_time_stamp) - 1
-            last_index_br = np.searchsorted(breathing_rate_estimation_time_stamp[:last_index_breathing_buffer_time],
-                                            breathing_rate_estimation_time_stamp[
-                                                last_index_breathing_buffer_time] - buffer_time, side='right')
-
             breathing_rate_estimation_value = np.roll(breathing_rate_estimation_value, -1)
             xb = x_axis_vital_signs_spectrum[
-                int(fft_size_vital_signs / 2 + np.mean(breathing_rate_estimation_index[estimation_index_breathing:]))]*60
-            breathing_rate_estimation_value[-1] = xb
-            estimation_plots[0][0].setData(breathing_rate_estimation_time_stamp[last_index_br:], breathing_rate_estimation_value[last_index_br:])
+                round(fft_size_vital_signs / 2 + np.mean(breathing_rate_estimation_index[estimation_index_breathing:]))]*60
+            breathing_rate_estimation_value[-1] = round(xb)
+            estimation_plots[0][0].setData(radar_time_stamp, breathing_rate_estimation_value)
 
         if heart_rate_estimation_index[estimation_index_heart] > 0:
             heart_rate_estimation_value = np.roll(heart_rate_estimation_value, -1)
             xh = x_axis_vital_signs_spectrum[
-                int(fft_size_vital_signs / 2 + np.mean(heart_rate_estimation_index[estimation_index_heart:]))] * 60
-            heart_rate_estimation_value[-1] = xh
-
-            current_time_hr = time.time()
-            time_passed_hr = current_time_hr - start_time_hr
-            start_time_hr = current_time_hr
-
-            heart_rate_estimation_time_stamp = np.roll(heart_rate_estimation_time_stamp, -1)
-            heart_rate_estimation_time_stamp[-1] = heart_rate_estimation_time_stamp[-2] + time_passed_hr
-
-            last_index_heart_buffer_time = len(heart_rate_estimation_time_stamp) - 1
-            last_index_hr = np.searchsorted(heart_rate_estimation_time_stamp[:last_index_heart_buffer_time],
-                                            heart_rate_estimation_time_stamp[
-                                                last_index_heart_buffer_time] - buffer_time, side='right')
-
-            estimation_plots[1][0].setData(heart_rate_estimation_time_stamp[last_index_hr:],
-                                           heart_rate_estimation_value[last_index_hr:])
+                round(fft_size_vital_signs / 2 + np.mean(heart_rate_estimation_index[estimation_index_heart:]))] * 60
+            heart_rate_estimation_value[-1] = round(xh)
+            estimation_plots[1][0].setData(radar_time_stamp, heart_rate_estimation_value)
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         if ENABLE_NEULOG:
             indices_values_r = [neulog_x_axis_respiration_spectrum[int(index + neulog_fft_size_respiration / 2)] for index in neulog_respiration_peak_index]
             multiplied_values_r = [value * 60 for value in indices_values_r]
-            estimation_plots[2][0].setData(neulog_respiration_time_stamp-buffer_time,multiplied_values_r)
+            estimation_plots[2][0].setData(neulog_time_stamp , multiplied_values_r)
 
             indices_values_p = [neulog_x_axis_pulse_spectrum[int(index + neulog_fft_size_pulse / 2)] for index in neulog_pulse_peak_index]
             multiplied_values_p = [value * 60 for value in indices_values_p]
-            estimation_plots[3][0].setData(neulog_pulse_time_stamp-buffer_time,multiplied_values_p)
+            estimation_plots[3][0].setData(neulog_time_stamp,multiplied_values_p)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # processing class
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -423,17 +391,18 @@ class RadarDataProcessor:
         global raw_data, filtered_raw_data, buffer_data_dds, wrapped_phase_plot, \
             unwrapped_phase_plot, filtered_breathing_plot, filtered_heart_plot, \
             buffer_dds_fft, phase_unwrap_fft, breathing_fft, heart_fft, \
-            breathing_rate_estimation_index, heart_rate_estimation_index, \
-            I_Q_envelop,x_axis_phase_unwrap, \
+            breathing_rate_estimation_index, heart_rate_estimation_index, I_Q_envelop, \
             neulog_respiration_fft, neulog_respiration_peak_index, \
             neulog_pulse_fft, neulog_pulse_peak_index, breathing_b, heart_b, index_start_heart, index_end_heart, \
-            index_end_breathing, index_end_breathing
+            index_end_breathing, index_end_breathing, start_time, radar_time_stamp
 
         counter = 0
         while True:
+            time.sleep(0.001)
             if not data_queue.empty():
                 frame = data_queue.get()
                 if np.size(frame) == num_of_samples:
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                     # Apply the filter to the complex data
                     raw_data = np.roll(raw_data, -num_of_samples)
                     raw_data[-num_of_samples:] = frame
@@ -453,84 +422,107 @@ class RadarDataProcessor:
                     I_Q_envelop = np.roll(I_Q_envelop, -new_data_size)
                     I_Q_envelop[-new_data_size:] = np.abs(new_data)
 
-                    x_axis_phase_unwrap = np.roll(x_axis_phase_unwrap, -new_data_size)
-                    x_axis_phase_unwrap[-new_data_size:] = x_axis_phase_unwrap[-new_data_size:] + buffer_time
-
                     counter += new_data_size
-                    if counter > processing_update_interval * vital_signs_sample_rate:
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        # phase unwrap
-                        wrapped_phase = np.angle(buffer_data_dds[-counter:])
-                        wrapped_phase_plot = np.roll(wrapped_phase_plot, -counter)
-                        wrapped_phase_plot[-counter:] = wrapped_phase[-counter:]
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    current_time = time.time()
+                    time_passed = current_time - start_time
+                    start_time = current_time
 
-                        unwrapped_phase_plot = np.roll(unwrapped_phase_plot, -counter)
-                        unwrapped_phase_plot[-counter:] = wrapped_phase_plot[-counter:]
+                    radar_time_stamp = np.roll(radar_time_stamp, -counter)
+                    radar_time_stamp[-counter:] = radar_time_stamp[-counter-1] + time_passed
+                    # if counter > processing_update_interval * vital_signs_sample_rate:
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # phase unwrap
+                    wrapped_phase = np.angle(buffer_data_dds[-counter:])
+                    wrapped_phase_plot = np.roll(wrapped_phase_plot, -counter)
+                    wrapped_phase_plot[-counter:] = wrapped_phase[-counter:]
 
-                        unwrapped_phase = np.unwrap(unwrapped_phase_plot[-processing_data_size:])
-                        unwrapped_phase_plot[-processing_data_size:] = unwrapped_phase
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        # filter
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        filtered_breathing = lfilter(breathing_b, 1, unwrapped_phase_plot[-processing_data_size:])
-                        filtered_breathing_plot = np.roll(filtered_breathing_plot, -counter)
-                        filtered_breathing_plot[-counter:] = filtered_breathing[-counter:]
+                    unwrapped_phase_plot = np.roll(unwrapped_phase_plot, -counter)
+                    unwrapped_phase_plot[-counter:] = wrapped_phase_plot[-counter:]
 
-                        filtered_heart = lfilter(heart_b, 1, unwrapped_phase_plot[-processing_data_size:])
-                        filtered_heart_plot = np.roll(filtered_heart_plot, -counter)
-                        filtered_heart_plot[-counter:] = filtered_heart[-counter:]
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        # Vital Signs FFT
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        buffer_dds_fft = self.vital_signs_fft(I_Q_envelop[-processing_data_size:], fft_size_vital_signs,
-                                                                  processing_data_size)
-                        phase_unwrap_fft = self.vital_signs_fft(unwrapped_phase_plot[-processing_data_size:], fft_size_vital_signs,
-                                                                processing_data_size)
-                        breathing_fft = self.vital_signs_fft(filtered_breathing_plot[-processing_data_size:], fft_size_vital_signs,
-                                                             processing_data_size)
-                        heart_fft = self.vital_signs_fft(filtered_heart_plot[-processing_data_size:], fft_size_vital_signs,
+                    unwrapped_phase = np.unwrap(unwrapped_phase_plot[-processing_data_size:])
+                    unwrapped_phase_plot[-processing_data_size:] = unwrapped_phase
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # filter
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    filtered_breathing = lfilter(breathing_b, 1, unwrapped_phase_plot[-processing_data_size:])
+                    cycle1, trend = sm.tsa.filters.hpfilter(filtered_breathing)
+                    filtered_breathing = uniform_filter1d(cycle1, size=2 * vital_signs_sample_rate)
+                    filtered_breathing_plot = np.roll(filtered_breathing_plot, -counter)
+                    filtered_breathing_plot[-counter:] = filtered_breathing[-counter:]
+
+                    cycle2, trend = sm.tsa.filters.hpfilter(unwrapped_phase_plot[-processing_data_size:],
+                                                            3 * vital_signs_sample_rate)
+                    filtered_heart = lfilter(heart_b, 1, cycle2)
+                    filtered_heart_plot = np.roll(filtered_heart_plot, -counter)
+                    filtered_heart_plot[-counter:] = filtered_heart[-counter:]
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # Vital Signs FFT
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    buffer_dds_fft = self.vital_signs_fft(I_Q_envelop[-processing_data_size:], fft_size_vital_signs,
+                                                              processing_data_size)
+                    phase_unwrap_fft = self.vital_signs_fft(unwrapped_phase_plot[-processing_data_size:], fft_size_vital_signs,
+                                                            processing_data_size)
+                    breathing_fft = self.vital_signs_fft(filtered_breathing_plot[-processing_data_size:], fft_size_vital_signs,
                                                          processing_data_size)
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        rate_index_br = self.find_signal_peaks(breathing_fft, index_start_breathing,
-                                                               index_end_breathing, peak_finding_distance)
-                        if rate_index_br != 0:
-                            breathing_rate_estimation_index = np.roll(breathing_rate_estimation_index, -1)
-                            breathing_rate_estimation_index[-1] = rate_index_br
+                    heart_fft = self.vital_signs_fft(filtered_heart_plot[-processing_data_size:], fft_size_vital_signs,
+                                                     processing_data_size)
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # Breathing and heart rate estimation
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    breathing_rate_estimation_index = np.roll(breathing_rate_estimation_index, -1)
+                    breathing_rate_estimation_index[-1] = breathing_rate_estimation_index[-2]
+                    rate_index_br = self.find_signal_peaks(breathing_fft, index_start_breathing,
+                                                           index_end_breathing, peak_finding_distance)
+                    if rate_index_br != 0:
+                        breathing_rate_estimation_index[-1] = rate_index_br
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    heart_rate_estimation_index = np.roll(heart_rate_estimation_index, -1)
+                    heart_rate_estimation_index[-1] = heart_rate_estimation_index[-2]
+                    rate_index_hr = self.find_signal_peaks(heart_fft, index_start_heart,
+                                                           index_end_heart, peak_finding_distance)
+                    if rate_index_hr != 0:
+                        heart_rate_estimation_index[-1] = rate_index_hr
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # neulog
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # respiration
+                    neulog_respiration_peak_index = np.roll(neulog_respiration_peak_index, -1)
+                    neulog_respiration_peak_index[-1] = neulog_respiration_peak_index[-2]
 
-                        rate_index_hr = self.find_signal_peaks(heart_fft, index_start_heart,
-                                                               index_end_heart, peak_finding_distance)
-                        if rate_index_hr != 0:
-                            heart_rate_estimation_index = np.roll(heart_rate_estimation_index, -1)
-                            heart_rate_estimation_index[-1] = rate_index_hr
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        # neulog
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        # respiration
-                        neulog_respiration_fft = self.vital_signs_fft(neulog_respiration_values[-neulog_processing_size_respiration:]-np.mean(neulog_respiration_values[-neulog_processing_size_respiration:]), neulog_fft_size_respiration,
-                                                                neulog_processing_size_respiration)/np.sqrt(neulog_processing_size_respiration)
-
-                        neulog_respiration_current_index = self.find_signal_peaks(neulog_respiration_fft, neulog_first_index_respiration,
-                                                               neulog_last_index_respiration, peak_finding_distance)
-                        if neulog_respiration_current_index > 0:
-                            neulog_respiration_peak_index = np.roll(neulog_respiration_peak_index,-1)
-                            neulog_respiration_peak_index[-1] = neulog_respiration_current_index
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        # pulse
-                        neulog_pulse_fft = self.vital_signs_fft(neulog_pulse_values[-neulog_processing_size_pulse:]-np.mean(neulog_pulse_values[-neulog_processing_size_pulse:]), neulog_fft_size_pulse,
-                                                                neulog_processing_size_pulse)/np.sqrt(neulog_processing_size_pulse)
-                        neulog_pulse_current_index = self.find_signal_peaks(neulog_pulse_fft, neulog_first_index_pulse,
-                                                               neulog_last_index_pulse, peak_finding_distance)
-                        if neulog_pulse_current_index > 0:
-                            neulog_pulse_peak_index = np.roll(neulog_pulse_peak_index,-1)
-                            neulog_pulse_peak_index[-1] = neulog_pulse_current_index
-                        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                        counter = 0
+                    neulog_respiration_fft = self.vital_signs_fft(
+                        neulog_respiration_values[-neulog_processing_size_respiration:] - np.mean(
+                            neulog_respiration_values[-neulog_processing_size_respiration:]),
+                        neulog_fft_size_respiration,
+                        neulog_processing_size_respiration) / np.sqrt(neulog_processing_size_respiration)
+                    neulog_respiration_current_index = self.find_signal_peaks(neulog_respiration_fft,
+                                                                              neulog_first_index_respiration,
+                                                                              neulog_last_index_respiration,
+                                                                              peak_finding_distance)
+                    if neulog_respiration_current_index > 0:
+                        neulog_respiration_peak_index[-1] = neulog_respiration_current_index
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # pulse
+                    neulog_pulse_peak_index = np.roll(neulog_pulse_peak_index, -1)
+                    neulog_pulse_peak_index[-1] = neulog_pulse_peak_index[-2]
+                    neulog_pulse_fft = self.vital_signs_fft(
+                        neulog_pulse_values[-neulog_processing_size_pulse:] - np.mean(
+                            neulog_pulse_values[-neulog_processing_size_pulse:]), neulog_fft_size_pulse,
+                        neulog_processing_size_pulse) / np.sqrt(neulog_processing_size_pulse)
+                    neulog_pulse_current_index = self.find_signal_peaks(neulog_pulse_fft, neulog_first_index_pulse,
+                                                                        neulog_last_index_pulse,
+                                                                        peak_finding_distance)
+                    if neulog_pulse_current_index > 0:
+                        neulog_pulse_peak_index[-1] = neulog_pulse_current_index
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                    counter = 0
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-def generate_phase_unwrap_plot(num_rx_antennas):
+def generate_phase_unwrap_plot():
     plot = pg.plot(title='Phase Estimation')
     plot.showGrid(x=True, y=True)
     plot.setLabel('bottom', 'Time [s]')
@@ -548,24 +540,18 @@ def generate_phase_unwrap_plot(num_rx_antennas):
         ('skyblue', 'NeuLog Pulse')
     ]
     plot_objects = [[] for _ in range(len(plots))]
-    for i in range(num_rx_antennas):
-        for j, (color, name) in enumerate(plots):
-            line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][i]}
-            if name != 'NeuLog Respiration' or 'NeuLog Pulse':
-                plot_obj = plot.plot(pen=line_style, name=f'{name} (Rx {i + 1})')
-            else:
-                plot_obj = plot.plot(pen=line_style, name=f'{name}')
-            plot_obj.setVisible(False)
-            plot_objects[j].append(plot_obj)
-    plot_objects[5][0].setVisible(True)
+    for j, (color, name) in enumerate(plots):
+        line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+        plot_obj = plot.plot(pen=line_style, name=f'{name}')
+        plot_obj.setVisible(False)
+        plot_objects[j].append(plot_obj)
+    plot_objects[4][0].setVisible(True)
     plot_objects[6][0].setVisible(True)
-    plot_objects[7][0].setVisible(True)
-    plot_objects[8][0].setVisible(True)
 
     return plot, plot_objects
 # Usage:
 if ENABLE_PHASE_UNWRAP_PLOT:
-    phase_unwrap_figure, phase_unwrap_plots = generate_phase_unwrap_plot(num_rx_antennas)
+    phase_unwrap_figure, phase_unwrap_plots = generate_phase_unwrap_plot()
     phase_unwrap_figure.show()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 def generate_vitalsigns_spectrum_plot(num_rx_antennas):
@@ -619,10 +605,10 @@ def generate_vitalsigns_spectrum_plot(num_rx_antennas):
     plot_objects[3][0].setVisible(True)
     plot_objects[4][0].setVisible(True)
     plot_objects[5][0].setVisible(True)
-    plot_objects[6][0].setVisible(True)
-    plot_objects[7][0].setVisible(True)
-    plot_objects[8][0].setVisible(True)
-    plot_objects[9][0].setVisible(True)
+    # plot_objects[6][0].setVisible(True)
+    # plot_objects[7][0].setVisible(True)
+    # plot_objects[8][0].setVisible(True)
+    # plot_objects[9][0].setVisible(True)
 
     linear_region_breathing = pg.LinearRegionItem([low_breathing, high_breathing], brush=(255, 255, 0, 20))
     plot.addItem(linear_region_breathing, 'Breathing Linear Region')
@@ -661,7 +647,7 @@ if ENABLE_VITALSIGNS_SPECTRUM:
     vital_signs_spectrum_figure, vital_signs_plots = generate_vitalsigns_spectrum_plot(num_rx_antennas)
     vital_signs_spectrum_figure.show()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-def generate_estimation_plot(num_rx_antennas):
+def generate_estimation_plot():
     plot = pg.plot(title='Vital Signs Estimation')
     plot.showGrid(x=True, y=True)
     plot.setLabel('bottom', 'Time [s]')
@@ -674,35 +660,35 @@ def generate_estimation_plot(num_rx_antennas):
         ('skyblue', 'NeuLog Pulse')
     ]
     plot_objects = [[] for _ in range(len(plots))]
-    for i in range(num_rx_antennas):
-        for j, (color, name) in enumerate(plots):
-            line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][i]}
-            if name == 'Breathing':
-                symbol_pen = pg.mkPen(None)  # No border for the symbol
-                symbol_brush = pg.mkBrush('g')  # Red color for the symbol
-                plot_obj = plot.plot(pen=None, symbol='s', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=8, name=f'{name} (Rx {i + 1})')
-            elif name == 'Heart':
-                symbol_pen = pg.mkPen(None)  # No border for the symbol
-                symbol_brush = pg.mkBrush('c')  # Red color for the symbol
-                plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=8, name=f'{name} (Rx {i + 1})')
-            elif name == 'NeuLog Respiration':
-                symbol_pen = pg.mkPen(None)  # No border for the symbol
-                symbol_brush = pg.mkBrush('moccasin')  # Red color for the symbol
-                plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=12, name=f'{name}')
-            elif name == 'NeuLog Pulse':
-                symbol_pen = pg.mkPen(None)  # No border for the symbol
-                symbol_brush = pg.mkBrush('skyblue')  # Red color for the symbol
-                plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=12, name=f'{name}')
-            else:
-                plot_obj = plot.plot(pen=line_style, name=f'{name} (Rx {i + 1})')
-            plot_obj.setVisible(True)
-            plot_objects[j].append(plot_obj)
+    # for i in range(num_rx_antennas):
+    for j, (color, name) in enumerate(plots):
+        line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+        if name == 'Breathing ':
+            symbol_pen = pg.mkPen(None)  # No border for the symbol
+            symbol_brush = pg.mkBrush('g')  # Red color for the symbol
+            plot_obj = plot.plot(pen=None, symbol='s', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=8, name=f'{name}')
+        elif name == 'Heart ':
+            symbol_pen = pg.mkPen(None)  # No border for the symbol
+            symbol_brush = pg.mkBrush('c')  # Red color for the symbol
+            plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=8, name=f'{name}')
+        elif name == 'NeuLog Respiration':
+            symbol_pen = pg.mkPen(None)  # No border for the symbol
+            symbol_brush = pg.mkBrush('moccasin')  # Red color for the symbol
+            plot_obj = plot.plot(pen=None, symbol='s', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=8, name=f'{name}')
+        elif name == 'NeuLog Pulse':
+            symbol_pen = pg.mkPen(None)  # No border for the symbol
+            symbol_brush = pg.mkBrush('skyblue')  # Red color for the symbol
+            plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=8, name=f'{name}')
+        else:
+            plot_obj = plot.plot(pen=line_style, name=f'{name}')
+        plot_obj.setVisible(True)
+        plot_objects[j].append(plot_obj)
     # plot_objects[0][0].setVisible(True)
     # plot_objects[1][0].setVisible(True)
     return plot, plot_objects
 # Usage:
 if ENABLE_ESTIMATION_PLOT:
-    estimation_figure, estimation_plots = generate_estimation_plot(num_rx_antennas)
+    estimation_figure, estimation_plots = generate_estimation_plot()
     estimation_figure.show()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -759,6 +745,7 @@ if __name__ == "__main__":
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         raw_data = np.zeros(raw_data_size, dtype=np.complex128)
         filtered_raw_data = np.zeros(raw_data_size, dtype=np.complex128)
+        radar_time_stamp = np.zeros(buffer_data_size)
         buffer_data_dds = np.zeros(buffer_data_size, dtype=np.complex128)
         I_Q_envelop = np.zeros(buffer_data_size)
         wrapped_phase_plot = np.zeros(buffer_data_size)
@@ -770,23 +757,21 @@ if __name__ == "__main__":
         phase_unwrap_fft = np.zeros(fft_size_vital_signs)
         breathing_fft = np.zeros(fft_size_vital_signs)
         heart_fft = np.zeros(fft_size_vital_signs)
-
-        breathing_rate_estimation_index = np.zeros(estimation_size_vital_signs)
-        heart_rate_estimation_index = np.zeros(estimation_size_vital_signs)
-        breathing_rate_estimation_value = np.zeros(estimation_size_vital_signs)
-        heart_rate_estimation_value = np.zeros(estimation_size_vital_signs)
-        breathing_rate_estimation_time_stamp = np.zeros(estimation_size_vital_signs)
-        heart_rate_estimation_time_stamp = np.zeros(estimation_size_vital_signs)
-
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        range_profile_peak_indices = np.zeros(buffer_data_size)
+        breathing_rate_estimation_index = np.zeros(buffer_data_size)
+        heart_rate_estimation_index = np.zeros(buffer_data_size)
+        breathing_rate_estimation_value = np.zeros(buffer_data_size)
+        heart_rate_estimation_value = np.zeros(buffer_data_size)
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # NeuLog
-        neulog_respiration_time_stamp = np.zeros(neulog_estimation_size_respiration)+buffer_time
+        neulog_time_stamp = np.zeros(neulog_estimation_size_respiration)
         neulog_respiration_values = np.zeros(neulog_estimation_size_respiration)
         neulog_respiration_estimation_value = np.zeros(neulog_estimation_size_respiration)
         neulog_respiration_fft = np.zeros(neulog_fft_size_respiration)
         neulog_respiration_peak_index = np.zeros(neulog_estimation_size_respiration)
 
-        neulog_pulse_time_stamp = np.zeros(neulog_estimation_size_pulse)+buffer_time
         neulog_pulse_values = np.zeros(neulog_estimation_size_pulse)
         neulog_pulse_estimation_value = np.zeros(neulog_estimation_size_pulse)
         neulog_pulse_fft = np.zeros(neulog_fft_size_pulse)
@@ -812,7 +797,3 @@ if __name__ == "__main__":
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         sys.exit(app.exec_())
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        data_thread.join()
-        process_thread.join()
-        if ENABLE_NEULOG:
-            neulog_thread.join()
