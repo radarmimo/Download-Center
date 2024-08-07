@@ -60,7 +60,7 @@ if ~exist('x0','var')
     x0              = exp(1i * phi); % initial sequence
 end
 if ~exist('L','var') % alphabet size
-   L                = 32;
+   L                = 16;
 end
 if ~exist('thr','var')
     thr             = 1e-5; % stopping threshold 
@@ -69,7 +69,7 @@ if ~exist('theta','var')
     theta           = 0; % pareto weight 
 end
 if ~exist('pF','var')
-    pF              = 1; % periodic auto-correlation optimization flag
+    pF              = 0; % periodic auto-correlation optimization flag
 end
 % ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 x0                  = x0(:);
@@ -182,6 +182,6 @@ if nargout == 0
     xlabel('shift (k)')
     ylabel('Correlation Level')
     
-%     scatterplot(x)
+    figure; plot(real(x),imag(x),'o')
     x = [];
 end

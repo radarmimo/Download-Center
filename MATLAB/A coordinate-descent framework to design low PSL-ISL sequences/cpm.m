@@ -53,8 +53,8 @@ function [ x , o, t] = cpm( x0,thr,theta,pF)
 % The input parameters can be chosed as follows:
 % Initial values if the fucntion was called internally  
 if ~exist('x0','var')
-    rng(1)
-    N               = 50; % code length
+    % rng(10)
+    N               = 100; % code length
     phi             = (2*rand(N,1)-1)*pi; % random initial phase
     x0              = exp(1i * phi); % random initial sequence
 end
@@ -65,7 +65,7 @@ if ~exist('theta','var')
     theta           = 0; % pareto weight 
 end
 if ~exist('pF','var')
-    pF              = 1; % periodic auto-correlation optimization flag
+    pF              = 0; % periodic auto-correlation optimization flag
 end
 % ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 tic
@@ -250,5 +250,10 @@ if nargout == 0 % plot the outputs if the fucntion was called internally
     xlabel('shift (k)')
     ylabel('Correlation Level')
     
+    figure; plot(real(x),imag(x),'o')
+    figure; plot(1:N,unwrap(angle(x))*180/pi,'-*')
+    ylabel('deg')
+    xlabel('N')
+    box on
     x = [];
 end
