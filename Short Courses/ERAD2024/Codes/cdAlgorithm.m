@@ -35,7 +35,7 @@ function cdAlgorithm(x0)
          'MarkerIndices', 1:5:2 * N - 1, 'LineWidth', LineWidth, 'DisplayName', 'Initial Sequence');
 
     % Flag for saving as video
-    saveAsVideo = true; % Set to true if you want to save the output as a video
+    saveAsVideo = false; % Set to true if you want to save the output as a video
     videoFilename = 'cdAlgorithm.avi';
 
     % Initialize video writer if needed

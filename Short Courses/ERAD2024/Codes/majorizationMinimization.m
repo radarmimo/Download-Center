@@ -48,7 +48,7 @@ function cout = majorizationMinimization(c, w, L)
          'MarkerIndices', 1:5:2 * N - 1, 'LineWidth', LineWidth);
 
     % Flag for saving as video
-    saveAsVideo = true; % Set to true if you want to save the output as a video
+    saveAsVideo = false; % Set to true if you want to save the output as a video
     videoFilename = 'majorizationMinimization.avi';
 
     % Initialize video writer if needed
