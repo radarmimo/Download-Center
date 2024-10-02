@@ -12,12 +12,16 @@ clc
 PRF = 1000;               % Pulse Repetition Frequency 
 PRI = 1 / PRF;            % Pulse Repetition Interval 
 nPulse = 5;               % Number of pulses
+
+
+tau = 200e-6;             % Pulse width 
+fc = 20e3;                % Pulse carrier frequency
+
 samplePerPulse = 1000;     % Number of samples per pulse 
-fs = samplePerPulse / PRI; % Sampling frequency (samples per second)
+fs = 20*fc; % Sampling frequency (samples per second)
+
 t_start = 0;              % Start time (0 ms)
 t = linspace(t_start, 1.5e-3, 1.5e-3*fs); % Time vector 
-tau = 200e-6;             % Pulse width 
-fc = 100e6;                % Pulse carrier frequency
 
 % Simulated delay and attenuation for the received signal
 delay_time = 400e-6;      % Round-trip delay 
