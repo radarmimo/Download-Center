@@ -9,19 +9,18 @@ clear
 clc
 
 % Parameters
-PRF = 1000;               % Pulse Repetition Frequency 
-PRI = 1 / PRF;            % Pulse Repetition Interval 
-nPulse = 5;               % Number of pulses
 
+PRI = 1e-3;               % Pulse Repetition Interval 
+PRF = 1/PRI;              % Pulse Repetition Frequency 
+nPulse = 2;               % Number of pulses
 
 tau = 200e-6;             % Pulse width 
-fc = 20e3;                % Pulse carrier frequency
 
-samplePerPulse = 1000;     % Number of samples per pulse 
+fc = 20e3;                % Pulse carrier frequency
 fs = 20*fc; % Sampling frequency (samples per second)
 
-t_start = 0;              % Start time (0 ms)
-t = linspace(t_start, 1.5e-3, 1.5e-3*fs); % Time vector 
+t_start = 100e-6;         % Start time 
+t = linspace(0, t_start+nPulse*PRI, (t_start+nPulse*PRI)*fs); % Time vector 
 
 % Simulated delay and attenuation for the received signal
 delay_time = 400e-6;      % Round-trip delay 
@@ -50,6 +49,8 @@ xlabel('Time (ms)', 'FontSize', 12);
 ylabel('Amplitude', 'FontSize', 12);
 grid on;
 set(gca, 'FontSize', 12);
+box on
+axis('tight')
 
 % Plot the transmit pulse
 figure('Position', [100, 100, 900, 600]);
@@ -58,6 +59,8 @@ xlabel('Time (ms)', 'FontSize', 12);
 ylabel('Amplitude', 'FontSize', 12);
 grid on;
 set(gca, 'FontSize', 12);
+box on
+axis('tight')
 
 % Plot the transmit and received pulses together for comparison
 figure('Position', [100, 100, 900, 600]);
@@ -68,3 +71,5 @@ ylabel('Amplitude', 'FontSize', 12);
 legend('Transmit Pulse', 'Received Pulse', 'FontSize', 12);
 grid on;
 set(gca, 'FontSize', 12);
+box on
+axis('tight')
