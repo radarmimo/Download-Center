@@ -8,47 +8,44 @@ close all
 clear
 clc
 
+rng(2024)
 % Constants
 c = 3e8;            % Speed of light in m/s
-fc = 150e6;           % Carrier frequency in Hz
+fc = 150e6;         % Carrier frequency in Hz
 lambda = c / fc;    % Wavelength in meters
-vrTarget1 = 100;           % Radial speed of the target in m/s
-vrTarget2 = 70;           % Radial speed of the target in m/s
+vrTarget1 = 100;    % Radial speed of the target in m/s
+vrTarget2 = 70;     % Radial speed of the target in m/s
 
 % Doppler frequency calculation
 fdTarget1 = 2 * vrTarget1 / lambda;  % Doppler frequency in Hz
 fdTarget2 = 2 * vrTarget2 / lambda;  % Doppler frequency in Hz
 
 % Parameters
-PRI = 1e-3;            % Pulse Repetition Interval 
-PRF = 1/PRI;           % Pulse Repetition Frequency 
-nPulse = 1;           % Number of pulses
+PRI = 1e-3;         % Pulse Repetition Interval 
+PRF = 1/PRI;        % Pulse Repetition Frequency 
+nPulse = 1;         % Number of pulses
 nFFT = 4096;
-tau = 200e-6;          % Pulse width 
-bandwidth = 1/tau;    % Bandwidth of the pulse
+tau = 200e-6;       % Pulse width 
+bandwidth = 1/tau;  % Bandwidth of the pulse
 
-fs = 10*bandwidth;    % Sampling frequency (samples per second)
+fs = 10*bandwidth;  % Sampling frequency (samples per second)
+samplePerChip = round(tau * fs);
 
-snr = 10;           % dB
+snr = 0;            % dB
 
-t_start = 100e-6;      % Start time (0 ms)
+t_start = 100e-6;   % Start time (0 ms)
 t = linspace(0, t_start+nPulse*PRI, (t_start+nPulse*PRI)*fs); % Time vector 
 
 % Simulated delay and attenuation for the received signal
 delayTarget1 = 400e-6;   % Round-trip delay of target
-delayTarget2 = 650e-6;   % Round-trip delay of target
-attTarget1 = 0.1;     % Attenuation factor
-attTarget2 = 0.2;     % Attenuation factor
-
-numRangeBins = round(PRI * fs);
-indexStart = round(t_start/PRI * numRangeBins);
-indexTarget = round((delayTarget1+tau/2)/PRI * numRangeBins);
+delayTarget2 = 500e-6;   % Round-trip delay of target
+attTarget1 = 0.1;        % Attenuation factor
+attTarget2 = 0.2;        % Attenuation factor
 
 pulseTx = zeros(size(t));   % Transmit pulse
 pulseRxTarget1 = zeros(size(t));   % Received pulse
 pulseRxTarget2 = zeros(size(t));   % Received pulse
 
-% doppler_signal = zeros(size(t));    % Doppler signal
 dopplerSignalTarget1 = cos(2 * pi * fdTarget1 * t);
 dopplerSignalTarget2 = cos(2 * pi * fdTarget2 * t);
 
@@ -64,27 +61,42 @@ for i = 0:nPulse-1
 end
 
 received_pulse = pulseRxTarget1 .* dopplerSignalTarget1 + pulseRxTarget2 .* dopplerSignalTarget2;  % Received pulse (Delayed and attenuated)
-received_signal = awgn(received_pulse,snr,"measured");
-% data_cube_noiseless = reshape(received_pulse(indexStart+1:end),[numRangeBins,nPulse]);
-% data_cube = reshape(received_signal(indexStart+1:end),[numRangeBins,nPulse]);
+received_signal = awgn(received_pulse, snr, "measured");
 
-
+% Animation setup
 figure('Position', [100, 100, 900, 600]);
-plot(t*1e3, pulseTx, 'r', 'LineWidth', 2,'DisplayName','Transmit Pulse'); hold on;  % Transmit pulse
-plot(t*1e3, pulseRxTarget1, 'm', 'LineWidth', 2,'DisplayName','Received Pulse Target #1');          % Received pulse
-plot(t*1e3, pulseRxTarget2, 'c', 'LineWidth', 2,'DisplayName','Received Pulse Target #2');          % Received pulse
-plot(t*1e3, received_signal, 'g', 'LineWidth', 2,'DisplayName','Received Signal');          % Received pulse
 
-legend()
-xlabel('Time (ms)', 'FontSize', 12);
-ylabel('Amplitude', 'FontSize', 12);
-% legend('Transmit Pulse', 'Received Pulse', 'Doppler Signal', 'FontSize', 12);
-grid on;
-set(gca, 'FontSize', 12);
-box on;
-axis('tight');
-ylim([-1 1]);
+% Initialize GIF file
+filename = 'matched_filter_animation.gif';  % Output GIF file name
 
-r = abs(xcorr(received_signal,pulseTx(end:-1:1)));
-% figure; 
-plot(t*1e3, r(round(tau*fs) + 1:round(tau*fs) + length(t)));
+for k = 1:length(t)
+    cla
+    plot(t*1e3, pulseTx, 'r', 'LineWidth', 2, 'DisplayName', 'Transmit Pulse'); hold on;
+    plot(t*1e3, received_signal, 'g', 'LineWidth', 2, 'DisplayName', 'Received Signal');
+
+    % Calculate matched filter output up to current time
+    r = abs(xcorr(received_signal(1:k), pulseTx(end:-1:1)));
+
+    % Plot matched filter output
+    plot(t*1e3, r(round(tau*fs) + 1:round(tau*fs) + length(t)), 'LineWidth', 2, 'DisplayName', 'Matched Filter Output');
+    
+    xlabel('Time (ms)', 'FontSize', 12);
+    ylabel('Amplitude', 'FontSize', 12);
+    legend();
+    grid on;
+    ylim([-1 3]);
+
+    % Capture frame and convert it to an image
+    frame = getframe(gcf);
+    img = frame2im(frame);
+    [imgIndexed, cmap] = rgb2ind(img, 256);  % Convert image to indexed color map
+
+    % Write the frame to the GIF file
+    if k == 1
+        imwrite(imgIndexed, cmap, filename, 'gif', 'LoopCount', Inf, 'DelayTime', 0.01);
+    else
+        imwrite(imgIndexed, cmap, filename, 'gif', 'WriteMode', 'append', 'DelayTime', 0.01);
+    end
+
+    pause(0.01);  % Pause to create animation effect
+end
