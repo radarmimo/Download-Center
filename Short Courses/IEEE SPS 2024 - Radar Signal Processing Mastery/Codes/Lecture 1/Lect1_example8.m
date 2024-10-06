@@ -13,8 +13,8 @@ rng(2024)
 c = 3e8;            % Speed of light in m/s
 
 % Parameters
-tau = 200e-6;       % Pulse width (200 µs)
-bandwidth = 1e6;    % Bandwidth of the signal (1 MHz)
+tau = 200e-6;       % Pulse width 
+bandwidth = 1e6;    % Bandwidth of the signal 
 fs = 10*bandwidth;  % Sampling frequency (samples per second)
 timeBandwidthProduct = tau * bandwidth;
 samplePerChip = round(tau * fs);
@@ -25,7 +25,7 @@ PRI = 1e-3;         % Pulse Repetition Interval
 PRF = 1/PRI;        % Pulse Repetition Frequency 
 nPulse = 1;         % Number of pulses
 
-t_start = 100e-6;   % Start time (0 ms)
+t_start = 100e-6;   % Start time 
 t = linspace(0, t_start+nPulse*PRI, (t_start+nPulse*PRI)*fs); % Time vector 
 
 % Time vector for pulse duration

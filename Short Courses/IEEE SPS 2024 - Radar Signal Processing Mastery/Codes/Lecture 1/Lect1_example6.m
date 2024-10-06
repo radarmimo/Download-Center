@@ -35,7 +35,7 @@ ddsRate = samplePerChip/timeBandwidthProduct;
 
 snr = 0;            % dB
 
-t_start = 100e-6;   % Start time (0 ms)
+t_start = 100e-6;   % Start time 
 t = linspace(0, t_start+nPulse*PRI, (t_start+nPulse*PRI)*fs); % Time vector 
 
 % Simulated delay and attenuation for the received signal

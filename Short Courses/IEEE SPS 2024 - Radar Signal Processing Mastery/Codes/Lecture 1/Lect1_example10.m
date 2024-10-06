@@ -13,8 +13,8 @@ rng(2024)
 c = 3e8;            % Speed of light in m/s
 
 % Parameters
-tau = 200e-6;       % Pulse width (200 µs)
-bandwidth = 1e6;    % Bandwidth of the signal (1 MHz)
+tau = 200e-6;       % Pulse width 
+bandwidth = 1e6;    % Bandwidth of the signal 
 fs = 10*bandwidth;  % Sampling frequency (samples per second)
 timeBandwidthProduct = tau * bandwidth;
 samplePerChip = round(tau * fs);
@@ -31,20 +31,22 @@ t = linspace(0, t_start+nPulse*PRI, (t_start+nPulse*PRI)*fs); % Time vector
 % Time vector for pulse duration
 tPulse = 0:1/fs:tau-1/fs;
 
-% Generate random binary code signal
-random_code = 2*randi([0 1], 1, timeBandwidthProduct) - 1;
-binary_optimized_code = lpdpm( random_code,1:6,1e-5,2,0);
-binary_optimized_resampled = repelem(binary_optimized_code, ddsRate);   
+% Generate Golomb  code signal
+alpha = exp(1i * 2*pi /timeBandwidthProduct);
+exponent = (0:(timeBandwidthProduct-1))' .* (1:timeBandwidthProduct)' / 2;
+golomb_code = alpha.^exponent;
+
+golomb_resampled = repelem(golomb_code, ddsRate);
 pulseTx = zeros(size(t));   % Transmit pulse
 
 % Insert random binary code in the transmit signal
 for i = 0:nPulse-1
     tInterval = t >= t_start + i*PRI & t <= t_start + i*PRI + tau; % Time interval for each pulse
-    pulseTx(tInterval) = binary_optimized_resampled;  % Set transmitted pulse to the random binary code
+    pulseTx(tInterval) = golomb_resampled;  % Set transmitted pulse to the random binary code
 end
 
 figure('Position', [100, 100, 900, 600]);
-plot(t*1e3, real(pulseTx), 'r', 'LineWidth', 2, 'DisplayName', 'Transmit Pulse (Optimized Binary)'); hold on;
+plot(t*1e3, real(pulseTx), 'r', 'LineWidth', 2, 'DisplayName', 'Transmit Pulse (Golomb Code)'); hold on;
 
 xlabel('Time (ms)', 'FontSize', 14);
 ylabel('Amplitude', 'FontSize', 14);
@@ -54,12 +56,10 @@ ylim([-1.5 1.5]);
 xlim([0.05,0.4])
 
 figure('Position', [100, 100, 900, 600]);
-r0 = abs(xcorr(random_code))/timeBandwidthProduct;
-r = abs(xcorr(binary_optimized_code))/timeBandwidthProduct;
+r = abs(xcorr(golomb_code))/timeBandwidthProduct;
 lags = linspace(-tau/2,tau/2,2*timeBandwidthProduct-1);
 hold all
-plot(lags/1e-6,20*log10(r0), 'LineWidth', 2, 'DisplayName', 'Autocorrelation (Initial Binary)')
-plot(lags/1e-6,20*log10(r), 'LineWidth', 2, 'DisplayName', 'Autocorrelation (Optimized Binary)')
+plot(lags/1e-6,20*log10(r), 'LineWidth', 2, 'DisplayName', 'Autocorrelation (Golomb Code)')
 xlabel('Time (us)', 'FontSize', 14);
 ylabel('Amplitude (dB)', 'FontSize', 14);
 legend();
@@ -69,8 +69,8 @@ grid on;
 
 % Plot the spectrogram of the random binary code
 figure('Position', [100, 100, 900, 600]);
-nFFT = length(binary_optimized_resampled)/5;
-spectrogram(binary_optimized_resampled, nFFT, round(nFFT-nFFT/20), nFFT, fs, 'yaxis');
+nFFT = length(golomb_resampled)/5;
+spectrogram(golomb_resampled, nFFT, round(nFFT-nFFT/20), nFFT, fs, 'yaxis');
 
 xlabel('Time (µs)', 'FontSize', 14);
 ylabel('Frequency (MHz)', 'FontSize', 14);
@@ -81,7 +81,7 @@ colorbar;
 ylim([0 bandwidth/1e6]);   % Show frequency from 0 to the bandwidth in MHz
 
 figure('Position', [100, 100, 900, 600]);
-[afmag, delay, doppler] = ambgfun(binary_optimized_code, 1, 1);
+[afmag, delay, doppler] = ambgfun(golomb_code, 1, 1);
 
 % Use 'surf' for better visibility
 surf(delay, doppler * bandwidth / 1e6, afmag, 'EdgeColor', 'none');
