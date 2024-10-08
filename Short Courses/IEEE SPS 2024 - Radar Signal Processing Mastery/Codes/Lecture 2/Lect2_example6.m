@@ -6,9 +6,6 @@
 close all;
 clear;
 clc;
-close all
-clear
-clc
 
 Nt = 24;
 Nr = 24;
