@@ -17,7 +17,6 @@ import time
 
 import numpy as np
 import pyqtgraph as pg
-import scipy.signal as signal
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -39,7 +38,7 @@ else:
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Initialization
 ENABLE_I_Q_PLOT = True
-sample_time = 1/sample_rate
+sample_time = 1 / sample_rate
 num_of_samples = 256
 window_time = 1  # second
 buffer_time = 5 * window_time  # second
@@ -51,33 +50,41 @@ epsilon_value = 0.00000001
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # data queue
 data_queue = queue.Queue()
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-def read_data(device):
+def read_data(sensor):
     while True:
-        frame_contents = device.get_next_frame()
+        frame_contents = sensor.get_next_frame()
         for frame in frame_contents:
             data_queue.put(frame)
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # processing class
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-class myProcessorClass:
-    def process_data(self):
+class MyProcessorClass:
+    @staticmethod
+    def process_data():
         global raw_data
         while True:
-            time.sleep(1/sample_rate)
+            time.sleep(1 / sample_rate)
             if not data_queue.empty():
                 frame = data_queue.get()
                 if np.size(frame) == num_of_samples:
                     raw_data = np.roll(raw_data, -num_of_samples)
                     raw_data[-num_of_samples:] = frame
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 def update_plots():
     if ENABLE_I_Q_PLOT:
         I_Q_PLOT[0][0].setData(IQ_xaxis, np.real(raw_data))
         I_Q_PLOT[1][0].setData(IQ_xaxis, np.imag(raw_data))
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 def generate_iq_plot():
@@ -97,6 +104,8 @@ def generate_iq_plot():
         plot_obj.setVisible(True)
         plot_objects[j].append(plot_obj)
     return plot, plot_objects
+
+
 # Usage:
 if ENABLE_I_Q_PLOT:
     iq_figure, I_Q_PLOT = generate_iq_plot()
@@ -149,7 +158,7 @@ if __name__ == "__main__":
         data_thread = threading.Thread(target=read_data, args=(device,))
         data_thread.start()
 
-        radar_processor = myProcessorClass()
+        radar_processor = MyProcessorClass()
         process_thread = threading.Thread(target=radar_processor.process_data, args=())
         process_thread.start()
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

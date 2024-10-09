@@ -1,0 +1,64 @@
+% SPS Short Course: Radar Signal Processing Mastery
+% Theory and Hands-On Applications with mmWave MIMO Radar Sensors
+% Date: 7-11 October 2024
+% Time: 9:00AM-11:00AM ET (New York Time)
+% Presenter: Mohammad Alaee-Kerahroodi
+
+close all;
+clear;
+clc
+
+% Load data file
+[filename, pathname] = uigetfile('*.csv', 'Select the data file');
+if isequal(filename, 0)
+    disp('User canceled the file selection');
+    return;
+end
+data1 = readmatrix(fullfile(pathname, filename));
+
+% Check the size of data
+if size(data1, 2) < 4
+    error('Data must have at least 4 columns (I1, I2, Q1, Q2)');
+end
+
+% Extract I and Q components
+I = data1(:, 1) + 1i * data1(:, 2);
+Q = data1(:, 3) + 1i * data1(:, 4);
+
+% Parameters
+sample_rate = 2000; % 2 kHz
+window_size = sample_rate; % 1 second window
+num_samples = length(I); % Total number of samples
+nFFT = 2^nextpow2(sample_rate);
+% Preallocate figure for plotting
+figure('Position', [100, 100, 900, 600]);
+hold on;
+xlabel('Frequency (Hz)', 'FontSize', 14);
+ylabel('Magnitude', 'FontSize', 14);
+title('Sliding FFT of Radar Data', 'FontSize', 16);
+grid on;
+
+% Iterate over the data with a sliding window
+for start_index = 1:round(window_size/4):num_samples - window_size + 1
+    % Define the current window
+    end_index = start_index + window_size - 1;
+    current_window = I(start_index:end_index); % Using I for FFT; can also use Q
+    
+    current_window = current_window - mean(current_window);
+    % Perform FFT
+    Y = fft(current_window,nFFT);
+    f = linspace(-sample_rate/2,sample_rate/2,nF); % Frequency vector
+    magnitude = abs(Y); % Magnitude spectrum
+
+    % Clear the previous plot and redraw
+    cla; % Clear current axes
+    plot(f, 10*log10(magnitude), 'LineWidth', 2); % Plot the magnitude spectrum
+    % xlim([0, sample_rate/2]); % Limit x-axis to Nyquist frequency
+    % ylim([0, max(magnitude)]); % Adjust y-axis to show magnitude
+    legend('FFT Magnitude', 'Location', 'northeast');
+    
+    % Update the figure
+    drawnow; % Force MATLAB to update the figure window
+end
+
+hold off; % Release the figure
