@@ -61,8 +61,8 @@ from scipy.signal import lfilter, firwin, find_peaks, filtfilt
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ENABLE_PHASE_UNWRAP_PLOT = True
-ENABLE_VITALSIGNS_SPECTRUM = False
-ENABLE_ESTIMATION_PLOT = False
+ENABLE_VITALSIGNS_SPECTRUM = True
+ENABLE_ESTIMATION_PLOT = True
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 estimation_index_heart = buffer_data_size - estimation_time * estimation_rate
