@@ -8,7 +8,7 @@
 # % Website: https://radarmimo.com/
 # % Email: info@radarmimo.com, mohammad.alaee@uni.lu
 # % ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-# Compatible Sensors: TI-xWR6843, TI-xWR1843, TI-xWR1642
+# Compatible Sensors: TI-xWR6843, TI-xWR1843, TI-xWR1642, TI-xWR1443
 # % ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 import sys
 import time

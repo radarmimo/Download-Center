@@ -8,5 +8,5 @@
 # https://radarmimo.com/
 Email: info@radarmimo.com, mohammad.alaee@uni.lu
 Code written by : Mohammad Alaee
-Compatible Sensors: xWR6843, xWR1843, xWR1642
+Compatible Sensors: xWR6843, xWR1843, xWR1642, TI-xWR1443
 # % ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
