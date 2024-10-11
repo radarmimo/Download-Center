@@ -36,7 +36,7 @@ ENABLE_ESTIMATION_PLOT = True
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # Device settings
 num_rx_antennas = 3
-frame_rate = 50  # Hz (equivalent to vital signs sampling rate when number of chirps is 1)
+frame_rate = 20  # Hz (equivalent to vital signs sampling rate when number of chirps is 1)
 number_of_chirps = 1
 samples_per_chirp = 64
 vital_signs_sample_rate = int(1 * frame_rate)
