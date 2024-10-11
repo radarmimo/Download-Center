@@ -56,8 +56,8 @@ from ifxradarsdk import get_version
 from ifxradarsdk.ltr11 import DeviceLtr11
 from ifxradarsdk.ltr11.types import Ltr11Config
 from pyqtgraph.Qt import QtCore
-from scipy.ndimage import uniform_filter1d
 from scipy.signal import lfilter, firwin, find_peaks, filtfilt
+
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ENABLE_PHASE_UNWRAP_PLOT = True
