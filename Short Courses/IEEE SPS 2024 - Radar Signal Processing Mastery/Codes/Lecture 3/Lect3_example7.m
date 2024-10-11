@@ -175,7 +175,7 @@ for start_index = 1:round(window_size/20):num_samples - window_size + 1
     xlabel('Time (s)', 'FontSize', 14);
     ylabel('Amplitude', 'FontSize', 14);
     grid on;
-    legend('In-phase (I)', 'Quadrature (Q)', 'Envelope', 'Current Window', 'Location', 'best');
+    legend('Unwrapped Phase', 'Filtered Unwrapped', 'Envelope', 'Current Window', 'Location', 'best');
     
     % Capture the current frame
     frame = getframe(gcf);
