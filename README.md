@@ -21,9 +21,9 @@ For more information, visit the official website: [RadarMIMO](https://radarmimo.
 ## 📂 Available Resources
 
 ### 🎓 Short Courses & Tutorials
-- **[Radar Signal Processing Mastery (Oct 2024)](https://radarmimo.com/short-course)**: A short course on radar signal processing, focusing on practical aspects of MIMO radar systems.  
-- **[Radar Waveform Optimization Mastery (EuRAD 2024)](https://radarmimo.com/waveform-optimization)**: A course covering the latest techniques in waveform design for MIMO radar.  
-- MATLAB and Python codes for hands-on learning and practical applications.
+- **[Radar Signal Processing Mastery (Oct 2024)](https://github.com/radarmimo/Download-Center/tree/49ca45eb536244bc79fd740ecf11b190898b38d8/Short%20Courses/IEEE%20SPS%202024%20-%20Radar%20Signal%20Processing%20Mastery)**: A short course on radar signal processing, focusing on practical aspects of MIMO radar systems.  
+- **[Radar Waveform Optimization Mastery (EuRAD 2024)](https://github.com/radarmimo/Download-Center/tree/49ca45eb536244bc79fd740ecf11b190898b38d8/Short%20Courses/EuMW2024%20SC04)**: A course covering the latest techniques in waveform design for MIMO radar.  
+- **[Advanced Waveform Design and Optimization Techniques: An Application to Pulse Compression in Weather Radar Systems(ERAD 2024)](https://github.com/radarmimo/Download-Center/tree/49ca45eb536244bc79fd740ecf11b190898b38d8/Short%20Courses/ERAD2024).
 
 ### 📑 Talks & Presentations
 - **[4D Imaging Radar with TI AWR2243 (EuMW 2024)](https://radarmimo.com/4d-imaging-automotive-mimo-radar/)**: An in-depth presentation on 4D imaging radar using TI’s AWR2243 in automotive applications.  
