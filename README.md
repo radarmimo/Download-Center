@@ -1,6 +1,6 @@
 # RadarMIMO Download Center  
 **Welcome to the official RadarMIMO Download Center**  
-A comprehensive collection of resources for MIMO radar research, including talks, tutorials, short courses, research code, and datasets.  
+A comprehensive collection of resources for MIMO radar research, including talks, tutorials, short courses, and research code.  
 
 ---
 
@@ -10,7 +10,7 @@ This repository provides a variety of resources for students, engineers, and rad
 - **🎓 Short Courses & Tutorials**: Access educational material on radar signal processing, waveform design, and more.  
 - **📚 Talks & Presentations**: Download slides and recordings from various radar-related talks and conferences.  
 - **💻 Research Code**: MATLAB and Python code for radar signal processing, MIMO simulation, and more.  
-- **📊 Datasets**: Radar data sets for use in signal processing, target detection, and other radar experiments.  
+
 
 These resources are aimed at advancing research and education in the field of MIMO radar systems.
 
@@ -29,7 +29,7 @@ For more information, visit the official website: [RadarMIMO](https://radarmimo.
 - **[4D Imaging Radar with TI AWR2243 (EuMW 2024)](https://radarmimo.com/4d-imaging-automotive-mimo-radar/)**: A presentation on 4D imaging radar using TI’s AWR2243 in automotive applications.  
 - **[A collection of keynotes and invited lectures from radar conferences and events](https://github.com/radarmimo/Download-Center/tree/main/Talks)**.
 
-### 🧬 Research Code & Datasets
+### 🧬 Research Code 
 - **[Radar signal processing examples for MATLAB/Python](https://radarmimo.com/download-center/)**.  
 - **[Raw radar datasets](https://radarmimo.com/download-center/).  
 
