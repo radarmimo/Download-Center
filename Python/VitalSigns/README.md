@@ -1,5 +1,5 @@
-# Vital Signs Radar Dataset & Code  
-**Welcome to the Vital Signs Radar Dataset & Code**  
+# Vital Signs Radar Code  
+**Welcome to the Vital Signs Radar Code**  
 This folder contains the code related to estimating vital signs such as heart rate and breathing rate using radar signals. It focuses on using radar systems for non-invasive monitoring of physiological parameters.
 
 ---
@@ -49,10 +49,10 @@ cd Download-Center/Python/VitalSigns
 Copyright (c) 2024, Mohammad Alaee, University of Luxembourg
 Website: https://radarmimo.com/
 
-This dataset and code are provided under the following terms:
+This code is provided under the following terms:
 
-Redistribution: You may use, modify, and redistribute the code and dataset as long as the copyright notice and conditions are retained.
-Attribution: If you use this dataset or code in your work, please attribute it as follows:
+Redistribution: You may use, modify, and redistribute the code as long as the copyright notice and conditions are retained.
+Attribution: If you use this code in your work, please attribute it as follows:
 "This work includes radar data and code developed by Mohammad Alaee, https://radarmimo.com/"
 No Warranty: The code and data are provided "as is" without warranties of any kind.
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
