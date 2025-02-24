@@ -1,12 +1,11 @@
-# Dynamic Target Detection Using Doppler-Tolerant Waveform Design MATLAB Code
+# Designing Interference-Immune Doppler-Tolerant Waveforms for Radar Systems
 
 This repository contains MATLAB code developed to support the findings and methodologies presented in the paper titled:
 
-**"Dynamic Target Detection Using Doppler-Tolerant Waveform Design for LFM Waveforms in the Presence of Interference"**  
+**"Designing Interference-Immune Doppler-Tolerant Waveforms for Radar Systems"**  
 Published in *IEEE Transactions on Aerospace and Electronic Systems (TAES)*  
 DOI: [10.1109/TAES.2022.9928573](https://ieeexplore.ieee.org/document/9928573)
 
-The code is designed to reproduce the results and figures discussed in the paper, providing hands-on experience to understand and evaluate the proposed waveform design method for dynamic target detection in the presence of interference.
 
 ## 🚀 Overview
 
