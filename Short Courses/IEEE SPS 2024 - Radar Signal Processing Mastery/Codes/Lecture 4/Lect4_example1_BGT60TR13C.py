@@ -216,8 +216,8 @@ class RadarDataProcessor:
                     # filter
                     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                     filtered_breathing = lfilter(breathing_b, 1, unwrapped_phase_plot[-processing_data_size:])
-                    cycle1, trend = sm.tsa.filters.hpfilter(filtered_breathing)
-                    filtered_breathing = uniform_filter1d(cycle1, size=2 * vital_signs_sample_rate)
+                    # cycle1, trend = sm.tsa.filters.hpfilter(filtered_breathing)
+                    # filtered_breathing = uniform_filter1d(cycle1, size=2 * vital_signs_sample_rate)
                     filtered_breathing_plot = np.roll(filtered_breathing_plot, -counter)
                     filtered_breathing_plot[-counter:] = filtered_breathing[-counter:]
 
