@@ -1,4 +1,4 @@
-# 📡 USRP Spectrum Analyzer
+# 📡 USRP-Based Spectrum Analyzer
 
 
 An open source spectrum analyzer for software-defined radios (SDR) using Ettus USRP devices, featuring real-time visualization and signal processing capabilities.
