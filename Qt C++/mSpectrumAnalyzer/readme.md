@@ -21,6 +21,13 @@ An open source spectrum analyzer for software-defined radios (SDR) using Ettus U
   # Ubuntu/Debian
   sudo apt install qtbase5-dev libuhd-dev libfftw3-dev cmake
   
+
+## Use cases:
+- RF spectrum monitoring
+- Wireless signal analysis
+- Educational demonstrations
+- SDR development testing
+
   
 ⚖️ License and Terms of Use
 Copyright (c) 2025, Mohammad Alaee, University of Luxembourg
