@@ -35,6 +35,7 @@ def main():
         window = MainWindow()
         radar_app = RadarApplication()
         window.attach_radar_visualizations(radar_app)
+        window.set_runtime_statistics_provider(radar_app.runtime_statistics.snapshot)
 
         # The worker threads only acquire and parse data. UI table updates are
         # relayed through queued Qt signals by MainWindow.
@@ -68,6 +69,13 @@ def main():
             logging.info("Application shutdown requested")
             plot_timer.stop()
 
+            # The visualization window is a permanent companion: close it only
+            # as part of the main application's shutdown sequence.
+            try:
+                window.close_visualization_for_shutdown()
+            except Exception:
+                logging.exception("Error closing the visualization companion window")
+
             # Stop RF/frame generation while the command UART is still open.
             # Only send sensorStop if this application previously issued sensorStart.
             try:
@@ -87,6 +95,9 @@ def main():
 
         window.closeEvent = close_event
         window.show()
+        # Start the companion visualization automatically. It remains open
+        # throughout the session and cannot be closed independently.
+        window.open_visualization_window()
         return app.exec_()
 
     except Exception as exc:

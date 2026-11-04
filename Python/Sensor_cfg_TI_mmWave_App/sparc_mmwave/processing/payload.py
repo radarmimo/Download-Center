@@ -104,101 +104,56 @@ class RadarDataParser:
 
         return noise_profile
 
-    def parse_azimuth_static_heatmap(self, payload, window):
-        """Parse the azimuth static heatmap."""
-        radar_params = getattr(window, "radar_params", None)
+    def _range_fft_bins(self, radar_params):
+        return int(radar_params.get("Number of Range FFT Bins") or radar_params.get("Number of Samples per Chirp") or 0)
 
-        if radar_params is not None:
-            range_fft_size = radar_params.get("Number of Samples per Chirp", None)
-            num_virtual_antennas = radar_params.get("Length of Virtual Array", None)
+    def _doppler_fft_bins(self, radar_params):
+        # The Doppler dimension is the number of chirps in one coherent
+        # processing interval per TX (TDM), not chirps-per-loop.
+        if radar_params.get("Waveform Multiplexing") == "Phased-Array":
+            chirps = int(radar_params.get("Number of Chirps in Frame") or 0)
         else:
-            logging.error("Radar parameters are None!")
+            counts = radar_params.get("TX Chirps per Frame") or {}
+            chirps = max((int(v) for v in counts.values()), default=0)
+            if not chirps:
+                chirps = int(radar_params.get("Number of Loops") or 0)
+        if chirps <= 0:
+            return 0
+        # SDK range-Doppler TLVs are padded to the processing Doppler FFT size.
+        return 1 << (chirps - 1).bit_length()
+
+    def parse_azimuth_static_heatmap(self, payload, window):
+        """Parse complex16 static azimuth heatmap using actual FFT/array sizes."""
+        radar_params = getattr(window, "radar_params", None) or {}
+        range_bins = self._range_fft_bins(radar_params)
+        antennas = int(radar_params.get("Length of Virtual Array") or 0)
+        if range_bins <= 0 or antennas <= 0:
+            logging.warning("Cannot parse azimuth heatmap: range FFT bins or virtual-array length is unavailable.")
             return None
-
-        if not range_fft_size or not num_virtual_antennas:
-            logging.error("Range FFT size or Number of Virtual Antennas is not set.")
+        bytes_per_cell = 4  # complex16: imaginary int16 followed by real int16
+        expected = range_bins * antennas * bytes_per_cell
+        if len(payload) != expected:
+            logging.warning("Azimuth heatmap TLV size mismatch: got %d bytes; expected %d (%d x %d complex bins).",
+                            len(payload), expected, range_bins, antennas)
             return None
-
-        expected_length = range_fft_size * num_virtual_antennas * 4  # 4 bytes per complex value (Imag + Real)
-        actual_length = len(payload)
-        logging.debug(f"Expected length: {expected_length}, Actual length: {actual_length}")
-
-        # if actual_length != expected_length:
-        #     raise ValueError(
-        #         f"Data length {actual_length} does not match expected length {expected_length}. "
-        #         f"Range FFT: {range_fft_size}, Virtual Antennas: {num_virtual_antennas}"
-        #     )
-
-        try:
-            # Parse the azimuth static heatmap
-            heatmap = np.zeros((range_fft_size, num_virtual_antennas), dtype=complex)
-
-            for r in range(range_fft_size):
-                for n in range(num_virtual_antennas):
-                    # Calculate the index for the start of the complex data (Imag, Real) for (range, antenna)
-                    start_index = (r * num_virtual_antennas + n) * 4  # 4 bytes per complex number
-                    imag_bytes = payload[start_index:start_index + 2]
-                    real_bytes = payload[start_index + 2:start_index + 4]
-
-                    # Convert bytes to short integers (2 bytes each for Imag and Real)
-                    imag_value = int.from_bytes(imag_bytes, byteorder='little', signed=True)
-                    real_value = int.from_bytes(real_bytes, byteorder='little', signed=True)
-
-                    # Construct the complex number and store it in the heatmap
-                    heatmap[r, n] = complex(imag_value, real_value)
-
-            return heatmap
-
-        except Exception as e:
-            logging.error(f"Error parsing azimuth static heatmap: {e}")
-            return None
+        values = np.frombuffer(payload, dtype="<i2").astype(np.float32)
+        values = values.reshape(range_bins, antennas, 2)
+        return values[:, :, 1] + 1j * values[:, :, 0]
 
     def parse_range_doppler_heatmap(self, payload, window):
-        radar_params = getattr(window, "radar_params", None)
-
-        if radar_params is not None:
-            range_fft_size = radar_params.get("Number of Samples per Chirp", None)
-            if radar_params.get("Waveform Multiplexing", None) == 'Phased-Array':
-                doppler_fft_size = int(radar_params.get("Number of Chirps in Frame", None))
-            else:
-                doppler_fft_size = int(radar_params.get("Number of Chirps in Loop", None))
-        else:
-            logging.error("Radar parameters are None!")
+        """Parse uint16 range-Doppler heatmap with dimensions from frame/TX schedule."""
+        radar_params = getattr(window, "radar_params", None) or {}
+        range_bins = self._range_fft_bins(radar_params)
+        doppler_bins = self._doppler_fft_bins(radar_params)
+        if range_bins <= 0 or doppler_bins <= 0:
+            logging.warning("Cannot parse range-Doppler heatmap: FFT dimensions are unavailable.")
             return None
-
-        if not range_fft_size or not doppler_fft_size:
-            logging.error("Range or Doppler FFT size not set.")
+        expected = range_bins * doppler_bins * 2
+        if len(payload) != expected:
+            logging.warning("Range-Doppler TLV size mismatch: got %d bytes; expected %d (%d x %d uint16 bins).",
+                            len(payload), expected, range_bins, doppler_bins)
             return None
-
-        # num_tx = radar_params.get('Number of TX Antennas', None)
-        # pass
-        expected_length = int(range_fft_size * doppler_fft_size * 2)  # Two bytes per point
-        actual_length = len(payload)
-        logging.debug(f"Expected length: {expected_length}, Actual length: {actual_length}")
-
-        # if actual_length != expected_length:
-        #     raise ValueError(
-        #         f"Data length {actual_length} does not match expected length {expected_length}. "
-        #         f"Range FFT: {range_fft_size}, Doppler FFT: {doppler_fft_size}"
-        #     )
-
-        try:
-            # Parse the range-Doppler heatmap
-            heatmap = []
-            for r in range(range_fft_size):
-                row = []
-                for d in range(doppler_fft_size):
-                    # Each point is 2 bytes (e.g., representing a complex number)
-                    point = int.from_bytes(payload[(r * doppler_fft_size + d) * 2: (r * doppler_fft_size + d) * 2 + 2],
-                                           byteorder='little')
-                    row.append(point)
-                heatmap.append(row)
-
-            return heatmap
-
-        except Exception as e:
-            logging.error(f"Error parsing range-Doppler heatmap: {e}")
-            return None
+        return np.frombuffer(payload, dtype="<u2").reshape(range_bins, doppler_bins).copy()
 
     def parse_statistics(self, tlv_payload):
         expected_length = 24

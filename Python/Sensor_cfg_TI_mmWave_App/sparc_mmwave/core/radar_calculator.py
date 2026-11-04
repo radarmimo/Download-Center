@@ -1,5 +1,4 @@
 import math
-from PyQt5.QtWidgets import QTableWidgetItem
 
 class RadarCalculator:
     light_speed = 299792458 # Speed of light in m/s
@@ -156,6 +155,67 @@ class RadarCalculator:
         radar_cube_size_kb = round(radar_cube_size_bytes / 1000, 3)
 
         return radar_cube_size_kb
+
+    def calculate_profile_metrics(self, freq_slope_MHz_us, sample_rate_KHz, samples_per_chirp,
+                                  ramp_end_time_us=None, adc_start_time_us=0.0,
+                                  beat_frequency_fraction=0.8):
+        """Calculate FMCW profile metrics from TI profileCfg fields.
+
+        ``ramp_end_time_us`` is the configured ramp-end time measured from
+        chirp start. The swept bandwidth is slope * ramp-end time; ADC
+        acquisition duration is a separate quantity and must not be used as
+        the chirp sweep duration.
+
+        ``beat_frequency_fraction`` is a configurable engineering margin on
+        the ADC sample rate. It is not a TI hardware limit; callers should
+        label resulting range as an estimated usable range.
+        """
+        slope = float(freq_slope_MHz_us)
+        fs_ksps = float(sample_rate_KHz)
+        samples = int(samples_per_chirp)
+        adc_start = float(adc_start_time_us or 0.0)
+        if slope <= 0 or fs_ksps <= 0 or samples <= 0:
+            raise ValueError("Frequency slope, sample rate and ADC samples must be positive")
+        if not 0.0 < beat_frequency_fraction <= 1.0:
+            raise ValueError("Beat-frequency fraction must be in (0, 1]")
+        if adc_start < 0:
+            raise ValueError("ADC start time cannot be negative")
+
+        adc_sampling_time_us = samples / fs_ksps * 1000.0
+        if ramp_end_time_us is None:
+            # Backwards-compatible fallback for callers without rampEndTime.
+            ramp_time = adc_start + adc_sampling_time_us
+        else:
+            ramp_time = float(ramp_end_time_us)
+        if ramp_time <= 0:
+            raise ValueError("Ramp end time must be positive")
+        if adc_start + adc_sampling_time_us > ramp_time + 1e-9:
+            raise ValueError("ADC acquisition window extends beyond rampEndTime")
+
+        bandwidth_MHz = slope * ramp_time
+        range_resolution_m = self.calculate_range_resolution(bandwidth_MHz)
+        # TI complex-I/Q ADC sampling represents positive beat frequencies
+        # up to the configured complex sample rate (not Fs/2 as for a real
+        # sampled signal). Keep the theoretical complex-sampling limit and a
+        # configurable engineering-margin range as separate quantities.
+        sample_rate_MHz = fs_ksps * 1e-3
+        maximum_beat_frequency_MHz = sample_rate_MHz
+        usable_beat_frequency_MHz = beat_frequency_fraction * sample_rate_MHz
+        maximum_range_m = self.calculate_unambiguous_range(
+            maximum_beat_frequency_MHz, slope
+        )
+        estimated_usable_range_m = self.calculate_unambiguous_range(
+            usable_beat_frequency_MHz, slope
+        )
+        return {
+            "ADC Sampling Time [us]": adc_sampling_time_us,
+            "Bandwidth [MHz]": bandwidth_MHz,
+            "Range Resolution [m]": range_resolution_m,
+            "Beat Frequency [MHz]": usable_beat_frequency_MHz,
+            "Maximum Beat Frequency [MHz]": maximum_beat_frequency_MHz,
+            "Maximum Range [m]": maximum_range_m,
+            "Unambiguous Range [m]": estimated_usable_range_m,
+        }
 
     def calculate_bandwidth_from_range_resolution(self, range_resolution_m):
         return round(self.light_speed / (2 * range_resolution_m * 1e6), 3)

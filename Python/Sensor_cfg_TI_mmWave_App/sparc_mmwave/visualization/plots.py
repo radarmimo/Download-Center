@@ -2,7 +2,7 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
 import pyqtgraph.opengl as gl
-from matplotlib import cm
+import matplotlib
 
 class RadarVisualizer:
     def __init__(self):
@@ -88,10 +88,22 @@ class RadarVisualizer:
                 heatmap_data = np.fft.fftshift(heatmap_data, axes=1)  # Shift along the secondary axis
 
             # Normalize data using the specified global minimum and maximum values
-            heatmap_data_normalized = (heatmap_data - min_value) / (max_value - min_value)
+            value_span = float(max_value) - float(min_value)
+            if not np.isfinite(value_span) or value_span <= 0:
+                value_span = 1.0
+            heatmap_data_normalized = (heatmap_data - min_value) / value_span
+            heatmap_data_normalized = np.nan_to_num(heatmap_data_normalized, nan=0.0, posinf=1.0, neginf=0.0)
+            heatmap_data_normalized = np.clip(heatmap_data_normalized, 0.0, 1.0)
 
             # Create a colormap lookup table
-            cmap = cm.get_cmap(colormap)
+            # Matplotlib >= 3.9 removed matplotlib.cm.get_cmap(). Use the
+            # public colormap registry API, which is supported by modern
+            # Matplotlib releases and avoids the deprecated cm.get_cmap path.
+            try:
+                cmap = matplotlib.colormaps.get_cmap(colormap)
+            except AttributeError:  # Compatibility with older Matplotlib (< 3.5)
+                from matplotlib import cm
+                cmap = cm.get_cmap(colormap)
             lookup_table = (cmap(np.linspace(0, 1, 256)) * 255).astype(np.uint8)
 
             # Apply the lookup table to the plot item

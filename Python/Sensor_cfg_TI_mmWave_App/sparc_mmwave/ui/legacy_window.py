@@ -1,4 +1,4 @@
-import time, random, os
+import time, random, os, math
 import serial.tools.list_ports
 from PyQt5.QtWidgets import QMainWindow, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, \
     QWidget, QCheckBox, QStatusBar, QLabel, QPlainTextEdit, QTabWidget, QHBoxLayout, QSpacerItem, QSizePolicy, \
@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt
 import serial
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from ..core.radar_calculator import RadarCalculator
+from ..core.timing_diagnostics import parse_standard_frame_cfg, calculate_chirps_per_tx_cpi
 from datetime import datetime
 from PyQt5.QtGui import QColor, QIcon
 import logging
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow, QWidget):
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # RadarCalculator instance
         self.radar_calculator = RadarCalculator()
+        self._cfg_update_in_progress = False
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         self.light_speed = 3e8
@@ -445,6 +447,7 @@ class MainWindow(QMainWindow, QWidget):
             "Number of Samples per Chirp",
             "Number of Bursts in Frame",
             "Number of Chirps in Loop",
+            "Chirp Configurations per Loop",
             "Number of Loops",
             "Frame Periodicity [ms]",
             "Active Frame Time [ms]",
@@ -469,7 +472,7 @@ class MainWindow(QMainWindow, QWidget):
         self.refresh_button.clicked.connect(self.refresh_serial_ports)
 
         self.connect_button = QPushButton("Connect")
-        self.connect_button.setEnabled(False)
+        self.connect_button.setEnabled(True)
         self.connect_button.clicked.connect(self.connect_checked_ports)
 
         # Create a table to display serial ports
@@ -645,6 +648,7 @@ class MainWindow(QMainWindow, QWidget):
         self.three_d_plot_layout = QVBoxLayout()
 
         three_d_plot_widget = gl.GLViewWidget()
+        self.three_d_plot_widget = three_d_plot_widget
         # # win.setWindowTitle('3D Point Cloud')
         #
         # # Add coordinate axes
@@ -1164,7 +1168,7 @@ class MainWindow(QMainWindow, QWidget):
         updated |= self.update_cfg_param(params, radar_params, 3, 'ADC Valid Start Time [us]', fmt="{:.2f}")
         updated |= self.update_cfg_param(params, radar_params, 4, 'Ramp End Time [us]', fmt="{:.2f}")
         updated |= self.update_cfg_param(params, radar_params, 7, 'Frequency Slope [MHz/us]', fmt="{:.2f}")
-        updated |= self.update_cfg_param(params, radar_params, 8, "Number of Bursts in Frame", scale=1, fmt="{}")
+        updated |= self.update_cfg_param(params, radar_params, 8, "TX Start Time [us]", fmt="{:.2f}")
         updated |= self.update_cfg_param(params, radar_params, 9, "Number of Samples per Chirp", scale=1, fmt="{}")
         updated |= self.update_cfg_param(params, radar_params, 10, "Sample Rate [KHz]", scale=1, fmt="{}")
         return updated
@@ -1172,8 +1176,21 @@ class MainWindow(QMainWindow, QWidget):
     def update_frame_cfg(self, params, radar_params):
         """Update parameters for the 'frameCfg' command."""
         updated = False
-        updated |= self.update_cfg_param(params, radar_params, 1, 'Number of Loops', scale=1.0, fmt="{:.2f}")
-        updated |= self.update_cfg_param(params, radar_params, 2, 'Number of Chirps in Loop', scale=1.0, fmt="{:.2f}")
+        # frameCfg: chirpStartIdx chirpEndIdx numLoops numFrames periodicity ...
+        # frameCfg: chirpStartIdx chirpEndIdx numLoops numFrames periodicity ...
+        # Chirp Configurations per Loop is the editable chirp-index span.
+        # Preserve the start index and derive the end index from the requested
+        # span. The separate Number of Chirps in Loop remains the per-TX CPI.
+        start_idx = int(float(params[0]))
+        chirps_per_loop = int(radar_params.get("Chirp Configurations per Loop", int(float(params[1])) - start_idx + 1))
+        if chirps_per_loop < 1:
+            raise ValueError("Chirp Configurations per Loop must be at least 1")
+        new_end_idx = start_idx + chirps_per_loop - 1
+        if int(float(params[1])) != new_end_idx:
+            params[1] = str(new_end_idx)
+            updated = True
+        updated |= self.update_cfg_param(params, radar_params, 2, 'Number of Loops', scale=1.0, fmt="{}")
+        updated |= self.update_cfg_param(params, radar_params, 3, 'Number of Frames', scale=1.0, fmt="{}")
         updated |= self.update_cfg_param(params, radar_params, 4, 'Frame Periodicity [ms]', scale=1.0, fmt="{:.2f}")
         return updated
 
@@ -1248,88 +1265,192 @@ class MainWindow(QMainWindow, QWidget):
             cell_item.setBackground(random_color)
 
     def on_chirp_cfg_table_cell_changed(self, row, column):
-        """
-        Handle changes made to the chirp configuration table.
+        """Apply an edited chirp parameter and refresh all dependent values.
 
-        This method processes user modifications to specific parameters and updates
-        the radar configuration accordingly while temporarily blocking signals to
-        avoid recursive triggers.
-
-        Args:
-            row (int): The row index of the changed cell.
-            column (int): The column index of the changed cell.
+        The editable chirp table is the source of user input.  The command
+        table is updated first, then the full configuration is parsed again
+        so Scene Parameters, FOV values and dashboard timing all reflect the
+        same committed configuration.
         """
-        # Temporarily block signals to prevent recursive updates
-        # self.radar_cfg_table.blockSignals(True)
-        self.settings_table.blockSignals(True)
-        self.chirp_cfg_table.blockSignals(True)
+        if column != 1 or getattr(self, "_cfg_update_in_progress", False):
+            return
+
+        item = self.chirp_cfg_table.item(row, column)
+        name_item = self.chirp_cfg_table.item(row, 0)
+        if item is None or name_item is None:
+            return
+
+        param = name_item.text().strip()
+        raw_value = item.text().strip()
+        command_by_parameter = {
+            "Frequency Slope [MHz/us]": "profileCfg",
+            "Frequency Start [GHz]": "profileCfg",
+            "Number of Samples per Chirp": "profileCfg",
+            "Sample Rate [KHz]": "profileCfg",
+            "Idle Time [us]": "profileCfg",
+            "Ramp End Time [us]": "profileCfg",
+            "ADC Valid Start Time [us]": "profileCfg",
+            "TX Start Time [us]": "profileCfg",
+            "Number of Chirps in Loop": "frameCfg",
+            "Chirp Configurations per Loop": "frameCfg",
+            "Number of Loops": "frameCfg",
+            "Measurement Rate [Hz]": "frameCfg",
+        }
+
+        self._cfg_update_in_progress = True
+        previous_radar_params = dict(self.radar_params)
+        previous_commands = [
+            (self.command_table.item(r, 0).text() if self.command_table.item(r, 0) else "",
+             self.command_table.item(r, 1).text() if self.command_table.item(r, 1) else "")
+            for r in range(self.command_table.rowCount())
+        ]
+        chirp_signals = self.chirp_cfg_table.blockSignals(True)
+        scene_signals = self.radar_cfg_table.blockSignals(True)
+        settings_signals = self.settings_table.blockSignals(True)
 
         try:
-            # Retrieve the changed item
-            item = self.chirp_cfg_table.item(row, column)
-            if not item:
-                return
+            if param in command_by_parameter:
+                value = float(raw_value)
+                if not math.isfinite(value):
+                    raise ValueError("Enter a finite numeric value")
+                integer_parameters = {
+                    "Number of Samples per Chirp", "Number of Chirps in Loop",
+                    "Chirp Configurations per Loop", "Number of Loops",
+                }
+                if param in integer_parameters and not value.is_integer():
+                    raise ValueError(f"{param} must be an integer")
+                if param == "Measurement Rate [Hz]":
+                    if value <= 0:
+                        raise ValueError("Measurement rate must be greater than zero")
+                    calculated_params = {"Frame Periodicity [ms]": 1000.0 / value}
+                else:
+                    if value <= 0 and param not in {"Idle Time [us]", "ADC Valid Start Time [us]"}:
+                        raise ValueError(f"{param} must be greater than zero")
+                    if value < 0:
+                        raise ValueError(f"{param} cannot be negative")
+                    calculated_params = {param: value}
+                    if param == "Chirp Configurations per Loop":
+                        start_idx = int(self.radar_params.get("Chirp Start Index", 0))
+                        end_idx = start_idx + int(value) - 1
+                        # Every selected chirp index must have a chirpCfg definition.
+                        defined_indices = set()
+                        for command_row in range(self.command_table.rowCount()):
+                            command_item = self.command_table.item(command_row, 0)
+                            args_item = self.command_table.item(command_row, 1)
+                            if command_item and args_item and command_item.text().strip() == "chirpCfg":
+                                fields = args_item.text().split()
+                                if len(fields) >= 8:
+                                    first, last = int(float(fields[0])), int(float(fields[1]))
+                                    defined_indices.update(range(first, last + 1))
+                        missing = [idx for idx in range(start_idx, end_idx + 1) if idx not in defined_indices]
+                        if missing:
+                            raise ValueError("No chirpCfg definition exists for chirp index/indices: " + ", ".join(map(str, missing)))
+                    if param == "Number of Chirps in Loop":
+                        # This legacy UI field is the per-TX Doppler CPI count.
+                        # Convert it back to frameCfg.numLoops using the number
+                        # of chirps assigned to each TX in one loop.
+                        current_loops = max(int(self.radar_params.get("Number of Loops", 0) or 0), 1)
+                        tx_counts = self.radar_params.get("TX Chirps per Frame", {}) or {}
+                        current_per_tx = max((int(v) for v in tx_counts.values()), default=0)
+                        per_tx_per_loop = current_per_tx / current_loops if current_per_tx else 1.0
+                        if per_tx_per_loop <= 0 or not math.isclose(value / per_tx_per_loop, round(value / per_tx_per_loop), abs_tol=1e-9):
+                            raise ValueError("Chirps per TX must be a multiple of the TX chirps scheduled in each loop")
+                        calculated_params["Number of Loops"] = int(round(value / per_tx_per_loop))
+                self.handle_cfg_update(calculated_params, cfgType=command_by_parameter[param])
+            elif param in {"Range Threshold (CFAR) [dB]", "Doppler Threshold (CFAR) [dB]"}:
+                value = float(raw_value)
+                if not math.isfinite(value):
+                    raise ValueError("Enter a finite numeric value")
+                self.handle_cfar_update("range" if param.startswith("Range") else "doppler", value)
+            else:
+                # Non-command/display-only rows are not silently mapped to a
+                # profileCfg field. Restore the last model value instead.
+                raise ValueError(f"{param} is not an editable radar command parameter")
 
-            # Get the parameter name from the first column
-            param = self.chirp_cfg_table.item(row, 0).text()
-            new_value = self.chirp_cfg_table.item(row, 1).text()
-
-            # Process the parameter changes
-            calculated_params = {}
-            if param == "Frequency Slope [MHz/us]":
-                calculated_params["Frequency Slope [MHz/us]"] = float(new_value)
-                self.handle_cfg_update(calculated_params, cfgType='profileCfg')
-
-            elif param == "Frequency Start [GHz]":
-                calculated_params["Frequency Start [GHz]"] = float(new_value)
-                self.handle_cfg_update(calculated_params, cfgType='profileCfg')
-
-            elif param == "Number of Samples per Chirp":
-                calculated_params["Number of Samples per Chirp"] = float(new_value)
-                self.handle_cfg_update(calculated_params, cfgType='profileCfg')
-
-            elif param == "Number of Chirps in Loop":
-                calculated_params["Number of Chirps in Loop"] = float(new_value)
-                self.handle_cfg_update(calculated_params, cfgType='frameCfg')
-
-            elif param == "Sample Rate [KHz]":
-                calculated_params["Sample Rate [KHz]"] = float(new_value)
-                self.handle_cfg_update(calculated_params, cfgType='profileCfg')
-
-            elif param == "Idle Time [us]":
-                calculated_params["Idle Time [us]"] = float(new_value)
-                self.handle_cfg_update(calculated_params, cfgType='profileCfg')
-
-            elif param == "ADC Valid Start Time [us]":
-                calculated_params["ADC Valid Start Time [us]"] = float(new_value)
-                self.handle_cfg_update(calculated_params, cfgType='profileCfg')
-
-            elif param == "Number of Loops":
-                calculated_params["Number of Loops"] = float(new_value)
-                self.handle_cfg_update(calculated_params, cfgType='frameCfg')
-
-            elif param == "Number of Bursts in Frame":
-                calculated_params["Number of Bursts in Frame"] = float(new_value)
-                self.handle_cfg_update(calculated_params, cfgType='profileCfg')
-
-            elif param == "Measurement Rate [Hz]":
-                calculated_params["Frame Periodicity [ms]"] = 1 / float(new_value) * 1000
-                self.handle_cfg_update(calculated_params, cfgType='frameCfg')
-
-            elif param == "Range Threshold (CFAR) [dB]":
-                self.handle_cfar_update('range', float(new_value))
-
-            elif param == "Doppler Threshold (CFAR) [dB]":
-                self.handle_cfar_update('doppler', float(new_value))
-
-            selected_radar = self.select_radar_combo_box.currentText()
             self.parse_commands_information("command_table", self.radar_params)
+            selected_radar = self.select_radar_combo_box.currentText()
             self.set_tables_information(self.radar_params, selected_radar)
+
+            # Visually identify Scene Parameters that changed as a consequence
+            # of this edit.  Use a consistent highlight (not random colours) so
+            # the user can quickly see the impact of each configuration change.
+            changed_parameters = self._get_changed_parameter_names(
+                previous_radar_params, self.radar_params
+            )
+            self.highlight_recalculated_parameters(
+                self.radar_cfg_table, changed_parameters, source_parameter=param
+            )
+
+            if hasattr(self, "_refresh_dashboard"):
+                self._refresh_dashboard()
+            if hasattr(self, "workflow_status"):
+                self.workflow_status.setText(
+                    f"Updated {param}. Dependent radar parameters and CFG commands have been recalculated; save or send the updated configuration when ready."
+                )
+        except Exception as exc:
+            # Roll back both model and generated commands if an edit is invalid
+            # or the loaded CFG does not contain the expected command fields.
+            self.radar_params.clear()
+            self.radar_params.update(previous_radar_params)
+            self.command_table.setRowCount(0)
+            for command, params in previous_commands:
+                r = self.command_table.rowCount()
+                self.command_table.insertRow(r)
+                self.command_table.setItem(r, 0, QTableWidgetItem(command))
+                self.command_table.setItem(r, 1, QTableWidgetItem(params))
+            try:
+                self.set_tables_information(
+                    self.radar_params, self.select_radar_combo_box.currentText()
+                )
+            except Exception:
+                pass
+            QMessageBox.warning(self, "Configuration update",
+                                f"Could not apply this parameter change.\n\n{exc}")
         finally:
-            # Ensure signals are unblocked after processing
-            # self.radar_cfg_table.blockSignals(False)
-            self.settings_table.blockSignals(False)
-            self.chirp_cfg_table.blockSignals(False)
+            self.chirp_cfg_table.blockSignals(chirp_signals)
+            self.radar_cfg_table.blockSignals(scene_signals)
+            self.settings_table.blockSignals(settings_signals)
+            self._cfg_update_in_progress = False
+
+    @staticmethod
+    def _get_changed_parameter_names(previous_values, current_values):
+        """Return parameter keys whose values changed during recalculation."""
+        changed = set()
+        for key, current in current_values.items():
+            if key not in previous_values:
+                changed.add(key)
+                continue
+            previous = previous_values[key]
+            if isinstance(previous, (int, float)) and isinstance(current, (int, float)):
+                if not math.isclose(float(previous), float(current), rel_tol=1e-9, abs_tol=1e-12):
+                    changed.add(key)
+            elif previous != current:
+                changed.add(key)
+        return changed
+
+    @staticmethod
+    def highlight_recalculated_parameters(table, changed_parameters, source_parameter=None):
+        """Highlight changed rows in the Scene Parameters table.
+
+        A soft green highlight is deliberately used instead of random colours:
+        it is consistent, readable, and clearly distinguishes recalculated
+        outputs from the edited input in the Chirp Configuration table.
+        """
+        highlight = QColor("#DDF4E7")
+        foreground = QColor("#164B35")
+        for row in range(table.rowCount()):
+            name_item = table.item(row, 0)
+            if name_item is None:
+                continue
+            parameter_name = name_item.text().strip()
+            if parameter_name not in changed_parameters or parameter_name == source_parameter:
+                continue
+            for column in range(table.columnCount()):
+                cell = table.item(row, column)
+                if cell is not None:
+                    cell.setBackground(highlight)
+                    cell.setForeground(foreground)
+                    cell.setToolTip("Recalculated automatically after editing a CFG parameter")
 
     def handle_cfar_update(self, cfar_type, new_value):
         """
@@ -1427,7 +1548,10 @@ class MainWindow(QMainWindow, QWidget):
         """
         row_count = table.rowCount()
         for row in range(row_count):
-            param = table.item(row, 0).text()
+            name_item = table.item(row, 0)
+            if name_item is None:
+                continue
+            param = name_item.text()
             if param == parameter_name:
                 # Format value: Use integer format if it's a whole number
                 formatted_value = f"{value:.3f}" if not float(value).is_integer() else str(int(value))
@@ -1569,6 +1693,14 @@ class MainWindow(QMainWindow, QWidget):
             if data_checkbox.isChecked():
                 self.connect_to_port(port_name, "Data")
 
+        connected = self.command_port_connected and self.data_port_connected
+        if hasattr(self, "workflow_status"):
+            self.workflow_status.setText(
+                "Both command and data ports connected. Load a configuration (if needed), then send & start."
+                if connected else
+                "Connection incomplete. Check that one command port and one data port are selected in Ports & Console."
+            )
+
     def disconnect_ports(self):
         # Disconnect from the data port
         if self.data_port_connected:
@@ -1648,57 +1780,128 @@ class MainWindow(QMainWindow, QWidget):
             self.command_circle.set_status("Disconnected")
             self.command_status_label.setText("Command Port: Disconnected")
 
+        # The application shell owns the operation button readiness rules.
+        if hasattr(self, "_refresh_action_states"):
+            self._refresh_action_states()
+
     def send_configuration(self):
-        # Check if the command port is defined
-        if not hasattr(self, 'command_port') or self.command_port is None:
-            self.command_textbox.appendPlainText("Error: Command port is not defined or initialized.")
+        """Transmit the loaded configuration and expose per-command progress."""
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtCore import QTime
+
+        # Switch to the execution transcript immediately, before validation or
+        # transmission starts, so the operator can see progress and any errors.
+        # Find the tab by its label instead of relying on a fixed index, since
+        # the configuration tabs may be reordered in future UI updates.
+        execution_tabs = getattr(self, "tab_widget_cfg", None)
+        if execution_tabs is not None:
+            for tab_index in range(execution_tabs.count()):
+                if execution_tabs.tabText(tab_index).strip().lower() == "command execution log":
+                    execution_tabs.setCurrentIndex(tab_index)
+                    break
+
+        def log(message):
+            stamp = QTime.currentTime().toString("HH:mm:ss.zzz")
+            self.command_textbox.appendPlainText(f"[{stamp}] {message}")
+            scrollbar = self.command_textbox.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+            QApplication.processEvents()
+
+        def update_feedback(status, progress, text):
+            if hasattr(self, "update_command_execution"):
+                self.update_command_execution(status, progress, text)
+            QApplication.processEvents()
+
+        if self.command_table.rowCount() == 0:
+            log("ERROR  No configuration loaded. Open Configuration → CFG Editor and load a .cfg file first.")
+            update_feedback("Configuration required", 0, "No configuration loaded")
+            return
+        if not self.command_port_connected or not getattr(self, "command_port", None):
+            log("ERROR  Command port is not connected. Connect the device before sending configuration.")
+            update_feedback("Command port disconnected", 0, "Transmission not started")
+            return
+        if not getattr(self.command_port, "is_open", False):
+            log("ERROR  Command serial port is closed.")
+            update_feedback("Command port closed", 0, "Transmission not started")
             return
 
-        # Check if the command port is connected
-        self.command_textbox.appendPlainText(f"Sending device configurations to command port {self.command_port.name}")
-
-        if not self.command_port_connected:
-            self.command_textbox.appendPlainText("Error: Command port is not connected")
-            return
-
-        self.command_textbox.appendPlainText(f"Sending commands to {self.command_port.name}")
-        self.command_textbox.appendPlainText("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-
-        # Loop through the command_table to read commands
+        from ..core.config_validation import validate_commands
+        command_rows = []
         for row in range(self.command_table.rowCount()):
-            # Extract command from the table (e.g., first column, second column)
-            command_item = self.command_table.item(row, 0)  # First column: command
-            parameter_item = self.command_table.item(row, 1)  # Second column: parameters
+            c_item = self.command_table.item(row, 0)
+            p_item = self.command_table.item(row, 1)
+            if c_item and c_item.text().strip():
+                command_rows.append((c_item.text().strip(), p_item.text().strip() if p_item else ""))
+        report = validate_commands(command_rows)
+        for warning in report.warnings:
+            log(f"WARNING  {warning}")
+        if report.errors:
+            for error in report.errors:
+                log(f"VALIDATION ERROR  {error}")
+            update_feedback("Configuration validation failed", 0, f"{len(report.errors)} error(s)")
+            return
+        log("VALIDATION  Configuration pre-flight checks passed.")
 
-            # Ensure the item is valid (not None)
-            if command_item is not None:
-                first_part_command = command_item.text().strip()  # Remove any spaces or newlines
-                parameters = parameter_item.text().strip()
-                full_command = f"{first_part_command} {parameters}"  # Combine command and parameters
-                # logging.info(full_command)
-                command_bytes = full_command.encode('latin1') + b'\n'
-                self.command_port.write(command_bytes)
-                normalized_command = first_part_command.lower()
+        total = self.command_table.rowCount()
+        sent = 0
+        self.sensor_running = False
+        log(f"START  Sending {total} configuration commands via {self.command_port.name}")
+        update_feedback("Sending configuration…", 0, f"0 / {total} commands")
+
+        for row in range(total):
+            command_item = self.command_table.item(row, 0)
+            parameter_item = self.command_table.item(row, 1)
+            if command_item is None:
+                log(f"ERROR  Row {row + 1}: empty command; sequence aborted.")
+                update_feedback("Configuration aborted", int(sent * 100 / total), f"{sent} / {total} commands")
+                break
+
+            command = command_item.text().strip()
+            parameters = parameter_item.text().strip() if parameter_item else ""
+            full_command = f"{command} {parameters}".strip()
+            if not command:
+                log(f"ERROR  Row {row + 1}: invalid empty command; sequence aborted.")
+                update_feedback("Configuration aborted", int(sent * 100 / total), f"{sent} / {total} commands")
+                break
+
+            # Show the command before writing so the operator sees progress in real time.
+            log(f"TX   [{row + 1}/{total}] {full_command}")
+            update_feedback(f"Transmitting command {row + 1} of {total}", int(row * 100 / total), f"{row} / {total} commands")
+            try:
+                self.command_port.write(full_command.encode("latin1") + b"\n")
+                self.command_port.flush()
+                sent += 1
+                normalized_command = command.lower()
                 if normalized_command == "sensorstart":
                     self.sensor_running = True
                 elif normalized_command == "sensorstop":
                     self.sensor_running = False
+                log(f"SENT [{row + 1}/{total}] {command}")
                 time.sleep(0.1)
+                byte_count = self.command_port.in_waiting
+                if byte_count > 0:
+                    response_bytes = self.command_port.read(byte_count)
+                    response_str = response_bytes.decode("latin1", errors="replace").strip()
+                    if response_str:
+                        log(f"RX   {response_str.replace(chr(10), ' | ')}")
+                update_feedback(f"Configuration sent ({sent}/{total})", int(sent * 100 / total), f"{sent} / {total} commands sent")
+            except Exception as exc:
+                log(f"ERROR  Failed to send command {row + 1} ({command}): {exc}")
+                update_feedback("Transmission failed", int(sent * 100 / total), f"Failed at command {row + 1}")
+                self.sensor_running = False
+                return
 
-                # Read the response
-                byteCount = self.command_port.in_waiting
-                if byteCount > 0:
-                    response_bytes = self.command_port.read(byteCount)
-                    response_str = response_bytes.decode('latin1').strip().replace("\n", "\n\t")
-                    print(response_str)
-                    self.command_textbox.appendPlainText(f"Response : {response_str}")
+        if sent == total:
+            log(f"COMPLETE  All {total} commands were written to the command UART.")
+            if self.sensor_running:
+                log("INFO  sensorStart was transmitted. Check the signal plots and data reception status.")
+                update_feedback("Start command sent · waiting for radar data", 100, f"{total} / {total} commands sent")
             else:
-                print(f"Row {row}: Command is empty or invalid.")
-                self.command_textbox.appendPlainText(f"Row {row}: Command is empty or invalid.")
-
-        self.command_textbox.appendPlainText("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-        # self.send_button.setEnabled(False)
-        time.sleep(0.2)
+                update_feedback("Configuration transmitted", 100, f"{total} / {total} commands sent")
+            if hasattr(self, "stop_device_button"):
+                self.stop_device_button.setEnabled(bool(self.sensor_running))
+            if hasattr(self, "workflow_status"):
+                self.workflow_status.setText("Configuration commands transmitted. Check the command execution log and confirm that live radar data appears in the signal plots.")
 
     def stop_device(self):
         """Stop RF/frame generation if the command UART is available."""
@@ -1768,13 +1971,9 @@ class MainWindow(QMainWindow, QWidget):
             self.radar_params["GUI Monitor"][3] = "1" if is_checked else "0"
 
         elif param == "Range Azimuth Heat Map":
-            calculated_params["Frame Periodicity [ms]"] = 1000
-            self.handle_cfg_update(calculated_params, cfgType='frameCfg')
             self.radar_params["GUI Monitor"][4] = "1" if is_checked else "0"
 
         elif param == "Range Doppler Heat Map":
-            calculated_params["Frame Periodicity [ms]"] = 1000
-            self.handle_cfg_update(calculated_params, cfgType='frameCfg')
             self.radar_params["GUI Monitor"][5] = "1" if is_checked else "0"
 
         elif param == "Statistics":
@@ -1862,6 +2061,12 @@ class MainWindow(QMainWindow, QWidget):
             self.parse_commands_information("command_table", self.radar_params)
             self.set_tables_information(self.radar_params, selected_radar)
             self.connect_button.setEnabled(True)
+            if hasattr(self, "_refresh_action_states"):
+                self._refresh_action_states()
+            else:
+                self.send_button.setEnabled(True)
+            if hasattr(self, "workflow_status"):
+                self.workflow_status.setText(f"Configuration loaded: {file_path}. Connect the device if you have not already, then send & start.")
             self.command_textbox.appendPlainText("".join(file_path))
             # self.radar_cfg_table.blockSignals(False)
             self.settings_table.blockSignals(False)
@@ -1879,6 +2084,12 @@ class MainWindow(QMainWindow, QWidget):
         self.parse_commands_information("command_table", self.radar_params)
         self.set_tables_information(self.radar_params, selected_radar)
         self.connect_button.setEnabled(True)
+        if hasattr(self, "_refresh_action_states"):
+            self._refresh_action_states()
+        else:
+            self.send_button.setEnabled(True)
+        if hasattr(self, "workflow_status"):
+            self.workflow_status.setText("Preset configuration loaded. Connect the device, then send & start.")
         self.settings_table.blockSignals(False)
         self.chirp_cfg_table.blockSignals(False)
 
@@ -1981,41 +2192,50 @@ class MainWindow(QMainWindow, QWidget):
 
         # Parse profile configuration
         profile_cfg_row = get_table_row('profileCfg')
+        # profileCfg arguments (zero-based): profileId, startFreq, idleTime,
+        # adcStartTime, rampEndTime, txOutPower, txPhaseShifter, freqSlope,
+        # txStartTime, numAdcSamples, digOutSampleRate, ...
         profile_indices = [7, 2, 4, 3, 10, 1, 9, 8]
         profile_values = extract_values_from_row(profile_cfg_row, profile_indices)
-        profile_values = list(map(float, profile_values[:-2])) + list(map(int, profile_values[-2:]))  # Fix here
-        freq_slope, idle_time, ramp_time, adc_start, sample_rate, freq_start, samples_per_chirp, bursts_per_frame = (
-            profile_values)
+        freq_slope, idle_time, ramp_time, adc_start, sample_rate, freq_start = map(float, profile_values[:6])
+        samples_per_chirp = int(float(profile_values[6]))
+        tx_start_time = float(profile_values[7])
         chirp_time = self.radar_calculator.calculate_chirp_time_us_from_ramp(ramp_time, adc_start)
         chirp_cycle_time = self.radar_calculator.calculate_chirp_cycle_time_us(idle_time, adc_start, chirp_time)
 
-        adc_sampling_time_us = samples_per_chirp / sample_rate * 1e3
-
-        bandwidth = self.radar_calculator.calculate_bandwidth_from_freq_slope(freq_slope, adc_sampling_time_us)
-
-        range_resolution = self.radar_calculator.calculate_range_resolution(bandwidth)
-        beat_freq = round(0.8 * sample_rate * 1e-3, 3)
-        unambiguous_range = self.radar_calculator.calculate_unambiguous_range(beat_freq, freq_slope)
-        maximum_range = round(samples_per_chirp * range_resolution,1)
+        profile_metrics = self.radar_calculator.calculate_profile_metrics(
+            freq_slope, sample_rate, samples_per_chirp,
+            ramp_end_time_us=ramp_time, adc_start_time_us=adc_start
+        )
+        bandwidth = profile_metrics["Bandwidth [MHz]"]
+        range_resolution = profile_metrics["Range Resolution [m]"]
+        beat_freq = profile_metrics["Beat Frequency [MHz]"]
+        unambiguous_range = profile_metrics["Unambiguous Range [m]"]
+        maximum_range = profile_metrics["Maximum Range [m]"]
 
         # Parse channelCfg command for number of TX and RX antennas and Cascading
         channel_cfg_row = get_table_row('channelCfg')
         num_rx, num_tx, cascading = parse_channel_cfg(channel_cfg_row)
 
-        chirp_repetition_period = round(num_tx * chirp_cycle_time)
-
-        # Parse frame configuration
+        # Standard frameCfg arguments: chirpStartIdx, chirpEndIdx, numLoops,
+        # numFrames, framePeriodicity, triggerSelect, frameTriggerDelay.
         frame_cfg_row = get_table_row('frameCfg')
-        frame_indices = [4, 2, 1]
-        frame_values = extract_values_from_row(frame_cfg_row, frame_indices)
-        frame_values = list(map(float, frame_values[:-1])) + list(map(int, frame_values[-1:]))  # Fix here
-        frame_periodicity, chirps_per_loop, num_loops = frame_values
-        chirps_per_burst = chirps_per_loop * (num_loops+1)
-        chirps_per_frame = chirps_per_burst * bursts_per_frame
-        burst_periodicity = self.radar_calculator.calculate_burst_periodicity_us(ramp_time, idle_time, chirps_per_burst)
-
-        active_frame_time = self.radar_calculator.calcuate_active_frame_time_ms(chirp_repetition_period,
-                                                                                chirps_per_loop)
+        frame_info = parse_standard_frame_cfg(self.command_table.item(frame_cfg_row, 1).text())
+        chirp_start_idx = frame_info["chirp_start_idx"]
+        chirp_end_idx = frame_info["chirp_end_idx"]
+        num_loops = frame_info["num_loops"]
+        num_frames = frame_info["num_frames"]
+        frame_periodicity = frame_info["frame_period_ms"]
+        chirps_per_loop = frame_info["chirps_per_loop"]
+        chirps_per_frame = frame_info["chirps_per_frame"]
+        # In standard frameCfg, chirps are emitted sequentially at the profile
+        # chirp interval (idleTime + rampEndTime). TX count does not multiply
+        # frame duration; TDM TX assignments are represented by chirpCfg masks.
+        chirp_repetition_period = chirp_cycle_time
+        bursts_per_frame = 1
+        chirps_per_burst = chirps_per_frame
+        burst_periodicity = chirps_per_frame * chirp_cycle_time
+        active_frame_time = chirps_per_frame * chirp_cycle_time / 1000.0
 
         # Parse CFAR, AoA FOV, and limits
         range_cfar, doppler_cfar = parse_cfar_configuration()
@@ -2023,14 +2243,39 @@ class MainWindow(QMainWindow, QWidget):
         range_limits = parse_limits('cfarFovCfg', '0', [0, 0])
         doppler_limits = parse_limits('cfarFovCfg', '1', [0, 0])
 
-        # Parse chirpCfg
-        chirp_cfg_row = get_table_row('chirpCfg')
-        waveform_multiplexing_value = extract_values_from_row(chirp_cfg_row,[7])
+        # Parse chirpCfg TX-enable masks over the chirp indices used by frameCfg.
+        # chirpCfg args: startIdx, endIdx, profileId, startFreqVar, slopeVar,
+        # idleVar, adcStartVar, txEnable (bit mask).
+        tx_chirp_counts = {0: 0, 1: 0, 2: 0}
+        chirp_cfg_masks = []
+        for cfg_row in range(table.rowCount()):
+            cmd_item = table.item(cfg_row, 0)
+            args_item = table.item(cfg_row, 1)
+            if not cmd_item or not args_item or not cmd_item.text().startswith('chirpCfg'):
+                continue
+            args = args_item.text().split()
+            if len(args) < 8:
+                continue
+            first_idx, last_idx, tx_mask = int(float(args[0])), int(float(args[1])), int(float(args[7]))
+            chirp_cfg_masks.append((first_idx, last_idx, tx_mask))
+        tx_mask_by_index = {}
+        for first_idx, last_idx, tx_mask in chirp_cfg_masks:
+            for chirp_idx in range(first_idx, last_idx + 1):
+                tx_mask_by_index[chirp_idx] = tx_mask
+        for chirp_idx in range(chirp_start_idx, chirp_end_idx + 1):
+            mask = tx_mask_by_index.get(chirp_idx, 0)
+            for tx_idx in tx_chirp_counts:
+                if mask & (1 << tx_idx):
+                    tx_chirp_counts[tx_idx] += num_loops
+        waveform_multiplexing_value = [str(mask) for _, _, mask in chirp_cfg_masks]
         waveform_multiplexing = self.parse_waveform_multiplexing(waveform_multiplexing_value)
 
         virtual_array_length = self.radar_calculator.calculate_virtual_array_length(num_tx, num_rx,waveform_multiplexing)
+        chirps_per_tx_cpi = calculate_chirps_per_tx_cpi(
+            tx_chirp_counts, chirps_per_frame, num_loops, waveform_multiplexing
+        )
         unambiguous_velocity, velocity_resolution = self.radar_calculator.calculate_unambiguous_velocity_and_velocity_resolution(
-            freq_start, chirp_cycle_time, num_tx, chirps_per_loop, chirps_per_frame, waveform_multiplexing
+            freq_start, chirp_cycle_time, num_tx, chirps_per_tx_cpi, chirps_per_frame, waveform_multiplexing
         )
 
         # Parse clutter removal
@@ -2045,7 +2290,9 @@ class MainWindow(QMainWindow, QWidget):
 
         # self.handle_bandwidth_update(bandwidth)
         numb_range_fft_bins = self.radar_calculator.nextpow2(samples_per_chirp)
-        numb_doppler_fft_bins = self.radar_calculator.nextpow2(chirps_per_frame)
+        # Doppler processing uses the number of chirps observed per TX in a
+        # TDM sequence (CPI), not the total chirp count across all TXs.
+        numb_doppler_fft_bins = self.radar_calculator.nextpow2(chirps_per_tx_cpi)
         # numb_angle_fft_bins = num_tx * num_rx
         self.update_radar_params(numb_range_fft_bins, numb_doppler_fft_bins)
 
@@ -2073,9 +2320,16 @@ class MainWindow(QMainWindow, QWidget):
             "Frequency Start [GHz]": freq_start,
             "Number of Bursts in Frame": bursts_per_frame,
             "Number of Chirps in Burst": chirps_per_burst,
+            "Chirp Start Index": chirp_start_idx,
+            "Chirp End Index": chirp_end_idx,
+            "Number of Frames": num_frames,
+            "TX Start Time [us]": tx_start_time,
             "Number of Chirps in Frame": chirps_per_frame,
             "Frame Periodicity [ms]": frame_periodicity,
-            "Number of Chirps in Loop": chirps_per_loop,
+            # Preserve the original application meaning: per-TX chirps in the
+            # Doppler CPI. The frameCfg chirp-index span is reported separately.
+            "Number of Chirps in Loop": chirps_per_tx_cpi,
+            "Chirp Configurations per Loop": chirps_per_loop,
             "Number of Loops": num_loops,
             "Burst Periodicity [us]": burst_periodicity,
             "Velocity Resolution [km/h]": velocity_resolution,
@@ -2091,6 +2345,7 @@ class MainWindow(QMainWindow, QWidget):
             "Doppler Min [Hz]": doppler_limits[0],
             "Doppler Max [Hz]": doppler_limits[1],
             "Number of TX Antennas": num_tx,  # Add number of TX antennas
+            "TX Chirps per Frame": tx_chirp_counts,
             "Number of RX Antennas": num_rx,  # Add number of RX antennas
             "Length of Virtual Array": virtual_array_length,
             "Cascading": cascading,  # Add cascading configuration
@@ -2104,12 +2359,22 @@ class MainWindow(QMainWindow, QWidget):
         })
 
     def parse_waveform_multiplexing(self, value):
-        # print("value = ", value)
-        if '7' in value or '5' in value:
-            selected_waveform = 'Phased-Array'
-        else:
-            selected_waveform = 'TDM-MIMO'
-        return selected_waveform
+        """Infer multiplexing from chirpCfg TX-enable masks.
+
+        A chirp with more than one enabled TX is phased-array style; a set of
+        one-hot masks assigned across chirps is TDM-MIMO. Empty/invalid masks
+        are treated conservatively as TDM-MIMO.
+        """
+        masks = []
+        for item in value or []:
+            try:
+                masks.append(int(str(item), 0))
+            except (TypeError, ValueError):
+                try:
+                    masks.append(int(str(item)))
+                except (TypeError, ValueError):
+                    continue
+        return 'Phased-Array' if any(mask > 0 and (mask & (mask - 1)) for mask in masks) else 'TDM-MIMO'
 
     def set_tables_information(self, radar_params, selected_radar):
         # Chirp Configuration Table Information
@@ -2120,6 +2385,7 @@ class MainWindow(QMainWindow, QWidget):
             "Frequency Slope [MHz/us]": radar_params["Frequency Slope [MHz/us]"],
             "Number of Samples per Chirp": radar_params["Number of Samples per Chirp"],
             "Number of Chirps in Loop": radar_params["Number of Chirps in Loop"],
+            "Chirp Configurations per Loop": radar_params.get("Chirp Configurations per Loop", 0),
             "Sample Rate [KHz]": radar_params["Sample Rate [KHz]"],
             # "Beat Frequency [MHz]": radar_params["Beat Frequency [MHz]"],
             "Idle Time [us]": radar_params["Idle Time [us]"],
@@ -2144,7 +2410,7 @@ class MainWindow(QMainWindow, QWidget):
             "Velocity Resolution [km/h]": radar_params["Velocity Resolution [km/h]"],
             "Length of Virtual Array" : radar_params["Length of Virtual Array"],
             "Number of Chirps in Frame": radar_params["Number of Chirps in Frame"],
-            "Number of Loops": radar_params["Number of Loops"] + 1,
+            "Number of Loops": radar_params["Number of Loops"],
             "Number of Bursts in Frame": radar_params["Number of Bursts in Frame"],
             "Radar Cube Size [KB]": radar_params["Radar Cube Size [KB]"],
         }

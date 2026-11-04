@@ -4,6 +4,7 @@ import queue
 import logging
 from ..processing.payload import RadarDataParser
 from ..visualization.plots import RadarVisualizer
+from .runtime_statistics import RuntimeStatistics
 import numpy as np
 from scipy.interpolate import griddata
 from scipy.ndimage import zoom
@@ -19,6 +20,7 @@ class RadarApplication:
         """Initialize shared variables and components."""
         self.data_queue = queue.Queue(maxsize=100)
         self.parser = RadarDataParser()
+        self.runtime_statistics = RuntimeStatistics(window_seconds=5.0)
         self.radar_visualizer = RadarVisualizer()
         self.stop_event = threading.Event()
         # self.window = MainWindow()
@@ -103,12 +105,19 @@ class RadarApplication:
 
                             frame_header = buffer[:expected_header_length]
                             total_packet_length = int.from_bytes(frame_header[12:16], byteorder='little')
+                            # Reject impossible lengths before waiting for or slicing a packet.
+                            if total_packet_length < expected_header_length or total_packet_length > max_buffer_size:
+                                logging.warning("Invalid radar packet length: %s bytes; resynchronizing", total_packet_length)
+                                buffer = buffer[1:]
+                                continue
 
                             if len(buffer) < total_packet_length:
                                 break  # Wait for more data
 
                             frame_data = buffer[:total_packet_length]
                             buffer = buffer[total_packet_length:]  # Remove processed frame
+                            frame_number = int.from_bytes(frame_header[20:24], byteorder='little')
+                            self.runtime_statistics.record_frame(frame_number, total_packet_length)
 
                             if not self.data_queue.full():
                                 self.data_queue.put(frame_data)
@@ -268,7 +277,7 @@ class RadarApplication:
                                                             noise_profile)
 
         # logging.info(f"data check: range doppler heatmap dimensions: {len(self.range_doppler_heatmap)}")
-        if self.range_doppler_heatmap:
+        if self.range_doppler_heatmap is not None and np.size(self.range_doppler_heatmap) > 0:
             #
             range_doppler_heatmap = np.array(self.range_doppler_heatmap)  # Shape: (256, 16)
             range_doppler_heatmap = np.fft.fftshift(range_doppler_heatmap, axes=1)
@@ -321,17 +330,28 @@ class RadarApplication:
             x_grid_2d, y_grid_2d = np.meshgrid(x_grid, y_grid)
 
             # Interpolate the matrix onto the new grid
-            matrix_rescaled = griddata(points, values, (x_grid_2d, y_grid_2d), method='cubic')
-
-            primary_axis = np.linspace(-maximum_range/2, maximum_range/2, num_range_bins)
-            secondary_axis = np.linspace(0, maximum_range, num_range_bins)
-
-            self.radar_visualizer.update_heatmap_plot(
-                self.range_azimuth_heatmap_item, matrix_rescaled,
-                primary_axis, secondary_axis, False,
-                min_value_range_azimuth, max_value_range_azimuth,
-                colormap='jet'
-            )
+            # Cubic interpolation can fail for sparse/degenerate antenna
+            # geometries. Prefer linear and fall back to nearest-neighbour so
+            # a valid TLV still produces a visible heatmap.
+            matrix_rescaled = None
+            for method in ("linear", "nearest"):
+                try:
+                    matrix_rescaled = griddata(points, values, (x_grid_2d, y_grid_2d), method=method)
+                    if matrix_rescaled is not None and np.isfinite(matrix_rescaled).any():
+                        break
+                except Exception as exc:
+                    logging.debug("Range-azimuth %s interpolation failed: %s", method, exc)
+                    matrix_rescaled = None
+            if matrix_rescaled is not None:
+                matrix_rescaled = np.nan_to_num(matrix_rescaled, nan=0.0, posinf=0.0, neginf=0.0)
+                primary_axis = np.linspace(np.min(x_grid), np.max(x_grid), azimuth_static_heatmap_grid_size)
+                secondary_axis = np.linspace(np.min(y_grid), np.max(y_grid), azimuth_static_heatmap_grid_size)
+                self.radar_visualizer.update_heatmap_plot(
+                    self.range_azimuth_heatmap_item, matrix_rescaled,
+                    primary_axis, secondary_axis, False,
+                    min_value_range_azimuth, max_value_range_azimuth,
+                    colormap='jet'
+                )
         if len(self.detected_points) > 0:
             pos = np.array([[point['X'], point['Y'], point['Z']] for point in self.detected_points])
             doppler = np.array([[point['Doppler']] for point in self.detected_points])

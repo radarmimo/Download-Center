@@ -8,14 +8,16 @@ navigation from the large legacy UI implementation.
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QIcon, QPixmap
+from PyQt5.QtGui import QIcon, QPixmap, QFont
 from PyQt5.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QSizePolicy,
     QStackedWidget, QTabWidget, QVBoxLayout, QWidget, QGridLayout,
-    QDialog, QToolButton,
+    QDialog, QToolButton, QScrollArea, QSizePolicy, QProgressBar, QApplication,
+    QSplitter,
 )
 
 from .legacy_window import MainWindow as LegacyMainWindow
+from ..core.timing_diagnostics import calculate_timing_metrics
 
 
 APP_ROOT = Path(__file__).resolve().parents[2]
@@ -32,9 +34,16 @@ class MainWindow(LegacyMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SPARC | mmWave Radar Studio")
+        app = QApplication.instance()
+        if app is not None:
+            ui_font = QFont("Segoe UI", 9)
+            ui_font.setStyleStrategy(QFont.PreferAntialias)
+            app.setFont(ui_font)
         self.setWindowIcon(QIcon(str(LOGO_PATH)))
-        self.setMinimumSize(1050, 700)
-        self.resize(1360, 860)
+        # Allow the application to fit smaller laptop displays; page content
+        # uses scroll areas where vertical space is limited.
+        self.setMinimumSize(800, 560)
+        self.resize(1280, 800)
 
         self.table_update_requested.connect(self._apply_table_update, Qt.QueuedConnection)
         self._build_application_shell()
@@ -77,54 +86,52 @@ class MainWindow(LegacyMainWindow):
         while self.tab_widget_main.count():
             self.tab_widget_main.removeTab(0)
 
-        # Header with SPARC identity and the two frequently used selectors.
+        # Unified application header: brand identity and global radar selectors
+        # share one aligned toolbar instead of appearing as disconnected blocks.
         header = QFrame()
         header.setObjectName("AppHeader")
+        header.setMinimumHeight(88)
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(18, 12, 18, 12)
-        header_layout.setSpacing(14)
+        header_layout.setContentsMargins(20, 10, 22, 10)
+        header_layout.setSpacing(18)
 
         logo = QLabel()
         logo.setObjectName("BrandLogo")
         if LOGO_PATH.exists():
             pixmap = QPixmap(str(LOGO_PATH))
-            logo.setPixmap(pixmap.scaledToHeight(48, Qt.SmoothTransformation))
-        logo.setFixedWidth(150)
+            logo.setPixmap(pixmap.scaledToHeight(44, Qt.SmoothTransformation))
+        logo.setFixedWidth(92)
         logo.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         header_layout.addWidget(logo)
 
         brand_text = QVBoxLayout()
+        brand_text.setContentsMargins(0, 0, 0, 0)
+        brand_text.setSpacing(2)
         title = QLabel("mmWave Radar Studio")
         title.setObjectName("AppTitle")
-        subtitle = QLabel("Configuration · Visualization · Diagnostics")
+        subtitle = QLabel("SPARC  /  Radar configuration and visualization")
         subtitle.setObjectName("AppSubtitle")
         brand_text.addWidget(title)
         brand_text.addWidget(subtitle)
-        header_layout.addLayout(brand_text)
-        header_layout.addStretch(1)
+        header_layout.addLayout(brand_text, 1)
 
-        header_layout.addWidget(self._field_label("Radar platform"))
-        header_layout.addWidget(self.select_radar_combo_box)
-        header_layout.addWidget(self._field_label("Configuration preset"))
-        header_layout.addWidget(self.select_default_best_Config_combo_box)
+        header_separator = QFrame()
+        header_separator.setObjectName("HeaderSeparator")
+        header_separator.setFrameShape(QFrame.VLine)
+        header_separator.setFixedHeight(46)
+        header_layout.addWidget(header_separator)
 
-        # Primary actions remain visible regardless of the selected page.
-        actions = QFrame()
-        actions.setObjectName("ActionBar")
-        action_layout = QHBoxLayout(actions)
-        action_layout.setContentsMargins(14, 8, 14, 8)
-        action_layout.setSpacing(9)
-        self.browse_config_button.setText("Load CFG")
-        self.connect_button.setText("Connect")
-        self.send_button.setText("Send configuration")
-        self.stop_device_button.setText("Stop device")
-        self.send_button.setObjectName("PrimaryButton")
-        self.stop_device_button.setObjectName("DangerButton")
-        for button in (self.browse_config_button, self.connect_button,
-                       self.send_button, self.stop_device_button):
-            button.setMinimumHeight(34)
-            action_layout.addWidget(button)
-        action_layout.addStretch(1)
+        platform_group = self._header_selector(
+            "RADAR PLATFORM", self.select_radar_combo_box, "PlatformSelector"
+        )
+        preset_group = self._header_selector(
+            "CONFIGURATION PRESET", self.select_default_best_Config_combo_box, "PresetSelector"
+        )
+        header_layout.addWidget(platform_group)
+        header_layout.addWidget(preset_group)
+
+        # Main actions are placed in a guided workflow on the Live Radar page.
+        # Loading a CFG is deliberately separated from serial-port connection.
 
         # Main navigation and content stack.
         shell = QWidget()
@@ -132,125 +139,421 @@ class MainWindow(LegacyMainWindow):
         shell_layout.setContentsMargins(0, 0, 0, 0)
         shell_layout.setSpacing(0)
         shell_layout.addWidget(header)
-        shell_layout.addWidget(actions)
 
-        body = QWidget()
-        body_layout = QHBoxLayout(body)
-        body_layout.setContentsMargins(12, 12, 12, 12)
-        body_layout.setSpacing(12)
-
-        sidebar = QFrame()
-        sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(190)
-        side_layout = QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(8, 12, 8, 12)
-        side_layout.setSpacing(6)
-        nav_caption = QLabel("WORKSPACE")
-        nav_caption.setObjectName("NavCaption")
-        side_layout.addWidget(nav_caption)
-
+        # Main content occupies the available central area.  Workspace
+        # navigation is deliberately placed in a full-width bottom bar rather
+        # than a vertical sidebar, giving the radar editor and plots more room.
         self.page_stack = QStackedWidget()
         self.page_stack.setObjectName("PageStack")
+        self.page_stack.setMinimumWidth(0)
         self.navigation_buttons = []
 
         # Configuration page: port management and the full CFG editor.
         config_page = QWidget()
         config_layout = QVBoxLayout(config_page)
-        config_tabs = QTabWidget()
-        config_tabs.addTab(legacy_tabs["Serial Ports"], "Ports & Console")
-        config_tabs.addTab(legacy_tabs["Configuration"], "CFG Editor")
-        config_layout.addWidget(config_tabs)
+        config_toolbar = QFrame()
+        config_toolbar.setObjectName("WorkflowPanel")
+        config_toolbar_layout = QHBoxLayout(config_toolbar)
+        config_toolbar_layout.setContentsMargins(12, 8, 12, 8)
+        config_hint = QLabel("Connect command and data UART ports; configure advanced serial settings here.")
+        config_hint.setObjectName("PanelTitle")
+        config_hint.setWordWrap(True)
+        config_toolbar_layout.addWidget(config_hint)
+        config_layout.addWidget(config_toolbar)
 
-        # Live page: the 3D scene and point/side-information tables.
+        # Device setup and diagnostics are one workspace: connection, UART
+        # configuration and sensor/display diagnostics are related tasks.
+        # Keep baud-rate selectors directly in this page rather than hiding
+        # them in a separate Diagnostics navigation item.
+        advanced_bar = QFrame()
+        advanced_bar.setObjectName("AdvancedBar")
+        adv_layout = QHBoxLayout(advanced_bar)
+        adv_layout.setContentsMargins(12, 8, 12, 8)
+        adv_layout.setSpacing(10)
+        advanced_title = QLabel("SERIAL COMMUNICATION")
+        advanced_title.setObjectName("NavCaption")
+        adv_layout.addWidget(advanced_title)
+        adv_layout.addWidget(self._field_label("Command baud rate"))
+        adv_layout.addWidget(self.select_commad_baudrate_combo_box)
+        adv_layout.addSpacing(14)
+        adv_layout.addWidget(self._field_label("Data baud rate"))
+        adv_layout.addWidget(self.select_data_baudrate_combo_box)
+        adv_layout.addStretch(1)
+        config_layout.addWidget(advanced_bar)
+
+        config_tabs = QTabWidget()
+        config_tabs.setObjectName("DeviceSetupTabs")
+        config_tabs.setDocumentMode(True)
+        config_tabs.addTab(legacy_tabs["Serial Ports"], "Ports & Console")
+        config_tabs.addTab(legacy_tabs["Frame Content"], "Frame & Sensor Diagnostics")
+        config_tabs.addTab(legacy_tabs["Settings"], "Display Diagnostics")
+        config_layout.addWidget(config_tabs, 1)
+
+        # Radar Control is a unified configuration-and-operation workspace.
+        # Users can edit the CFG and immediately connect/send/start without
+        # navigating between separate tabs.
         live_page = QWidget()
         live_layout = QVBoxLayout(live_page)
-        self.live_tabs = QTabWidget()
-        self.live_tabs.setDocumentMode(True)
-        self.live_tabs.addTab(legacy_tabs["3D scatter plot"], "3D Point Cloud")
-        self.live_tabs.addTab(legacy_tabs["Detected Points"], "Detected Points")
-        live_layout.addWidget(self.live_tabs)
+        live_layout.setContentsMargins(10, 8, 10, 10)
+        live_layout.setSpacing(8)
 
-        # Diagnostics page: frame/TLV information and display tuning.
-        diagnostics_page = QWidget()
-        diagnostics_layout = QVBoxLayout(diagnostics_page)
-        diagnostics_tabs = QTabWidget()
-        diagnostics_tabs.addTab(legacy_tabs["Frame Content"], "Frame & Sensor Data")
-        diagnostics_tabs.addTab(legacy_tabs["Settings"], "Display Settings")
-        diagnostics_layout.addWidget(diagnostics_tabs)
+        cfg_toolbar = QFrame()
+        cfg_toolbar.setObjectName("WorkflowPanel")
+        cfg_toolbar_layout = QHBoxLayout(cfg_toolbar)
+        cfg_toolbar_layout.setContentsMargins(12, 7, 12, 7)
+        cfg_title = QLabel("Radar configuration")
+        cfg_title.setObjectName("PanelTitle")
+        cfg_description = QLabel("Load, edit, validate and save the TI configuration, then apply it to the connected radar.")
+        cfg_description.setObjectName("PageDescription")
+        cfg_description.setWordWrap(True)
+        self.browse_config_button.setText("Load .cfg")
+        self.browse_config_button.setObjectName("SecondaryButton")
+        self.browse_config_button.setMinimumHeight(34)
+        cfg_toolbar_layout.addWidget(cfg_title)
+        cfg_toolbar_layout.addSpacing(10)
+        cfg_toolbar_layout.addWidget(cfg_description, 1)
+        cfg_toolbar_layout.addWidget(self.browse_config_button)
+        live_layout.addWidget(cfg_toolbar)
+
+        workflow = QFrame()
+        workflow.setObjectName("WorkflowPanel")
+        workflow_layout = QHBoxLayout(workflow)
+        workflow_layout.setContentsMargins(12, 8, 12, 8)
+        workflow_layout.setSpacing(8)
+        workflow_heading = QLabel("DEVICE CONTROL")
+        workflow_heading.setObjectName("NavCaption")
+        workflow_layout.addWidget(workflow_heading)
+        for button, text, object_name in (
+            (self.connect_button, "Connect device", "SecondaryButton"),
+            (self.send_button, "Send configuration + start", "PrimaryButton"),
+            (self.stop_device_button, "Stop radar", "DangerButton"),
+        ):
+            button.setText(text)
+            button.setObjectName(object_name)
+            button.setMinimumHeight(36)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            workflow_layout.addWidget(button, 1)
+        live_layout.addWidget(workflow)
+
+        self.workflow_status = QLabel("Load or edit a CFG file, connect both UART ports, then send the configuration to start the radar.")
+        self.workflow_status.setObjectName("PageDescription")
+        self.workflow_status.setWordWrap(True)
+        live_layout.addWidget(self.workflow_status)
+
+        # Move the raw command table and Save CFG action out of the editor
+        # page. They are presented together with the execution transcript in
+        # the lower tabbed workspace, avoiding a long command table consuming
+        # vertical space needed by the editable radar-parameter tabs.
+        command_table = self.command_table
+        if command_table.parentWidget() is not None:
+            command_table.parentWidget().layout().removeWidget(command_table)
+        command_table.setParent(None)
+        save_cfg_button = self.save_cfg_push_button
+        if save_cfg_button.parentWidget() is not None:
+            save_cfg_button.parentWidget().layout().removeWidget(save_cfg_button)
+        save_cfg_button.setParent(None)
+
+        # Reuse the original CFG editor widget directly in this workspace.
+        # Its existing tables, editing callbacks and dependent-parameter
+        # calculations are intentionally preserved. A page removed from a
+        # QTabWidget is hidden by Qt; explicitly show it after reparenting.
+        cfg_editor_page = legacy_tabs["Configuration"]
+        cfg_editor_page.setMinimumHeight(0)
+        cfg_editor_page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        cfg_editor_page.show()
+        self.cfg_editor_page = cfg_editor_page
+
+        # The original editor contains several stacked tables and action rows.
+        # On smaller displays, compressing that page caused its controls to
+        # overlap. Keep the editor intact and scroll its contents instead.
+        self.cfg_editor_scroll = QScrollArea()
+        self.cfg_editor_scroll.setObjectName("CfgEditorScroll")
+        self.cfg_editor_scroll.setWidgetResizable(True)
+        self.cfg_editor_scroll.setFrameShape(QFrame.NoFrame)
+        self.cfg_editor_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.cfg_editor_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.cfg_editor_scroll.setWidget(cfg_editor_page)
+
+        # Keep the complete CFG editor in the main Radar Control workspace.
+        # The command-list and execution-log views are appended to the same
+        # tab bar as Chirp / Field of View / Display / EVM Info below, so the
+        # user has one coherent configuration workspace rather than two
+        # separate tab strips.
+        live_layout.addWidget(self.cfg_editor_scroll, 1)
+
+        # Unified visualization workspace: signal plots, 3D point cloud and
+        # detected-points table are grouped under one main navigation item.
+        # The tab strip is placed at the bottom to preserve the familiar
+        # visualization canvas and reduce top-of-page chrome.
+        visualization_page = QWidget()
+        visualization_layout = QVBoxLayout(visualization_page)
+        visualization_layout.setContentsMargins(12, 12, 12, 12)
+        visualization_layout.setSpacing(8)
+        visualization_header = QHBoxLayout()
+        visualization_heading = QLabel("Radar visualization")
+        visualization_heading.setObjectName("PageHeading")
+        visualization_description = QLabel(
+            "Signal profiles, range-angle maps, 3D detections and point measurements")
+        visualization_description.setObjectName("PageDescription")
+        self.popout_point_cloud_button = QPushButton("Open 3D viewer")
+        self.popout_point_cloud_button.setObjectName("SecondaryButton")
+        self.popout_point_cloud_button.clicked.connect(self.open_point_cloud_viewer)
+        visualization_header.addWidget(visualization_heading)
+        visualization_header.addStretch(1)
+        visualization_header.addWidget(visualization_description)
+        visualization_header.addWidget(self.popout_point_cloud_button)
+        visualization_layout.addLayout(visualization_header)
+
+        self.visualization_tabs = QTabWidget()
+        self.visualization_tabs.setObjectName("VisualizationTabs")
+        self.visualization_tabs.setDocumentMode(True)
+        self.visualization_tabs.setTabPosition(QTabWidget.South)
+        self.visualization_tabs.addTab(legacy_tabs["3D scatter plot"], "3D Point Cloud")
+        self.visualization_tabs.addTab(legacy_tabs["Detected Points"], "Detected Points")
+        visualization_layout.addWidget(self.visualization_tabs, 1)
+        self.visualization_page = visualization_page
+
+        # Keep the detailed command transcript available for troubleshooting,
+        # but remove it from the primary configuration/operation workspace.
+        command_panel = QFrame()
+        command_panel.setObjectName("CommandPanel")
+        command_panel_layout = QVBoxLayout(command_panel)
+        command_panel_layout.setContentsMargins(12, 8, 12, 8)
+        command_panel_layout.setSpacing(6)
+        command_header = QHBoxLayout()
+        command_title = QLabel("Command execution log")
+        command_title.setObjectName("PanelTitle")
+        self.command_execution_status = QLabel("Waiting for configuration")
+        self.command_execution_status.setObjectName("ExecutionStatus")
+        command_header.addWidget(command_title)
+        command_header.addStretch(1)
+        command_header.addWidget(self.command_execution_status)
+        command_panel_layout.addLayout(command_header)
+        self.command_progress = QProgressBar()
+        self.command_progress.setObjectName("CommandProgress")
+        self.command_progress.setRange(0, 100)
+        self.command_progress.setValue(0)
+        self.command_progress.setTextVisible(True)
+        self.command_progress.setFormat("No configuration sequence running")
+        self.command_progress.setMaximumHeight(17)
+        command_panel_layout.addWidget(self.command_progress)
+        self.command_textbox.setReadOnly(True)
+        self.command_textbox.setMinimumHeight(82)
+        self.command_textbox.setMaximumHeight(16777215)
+        self.command_textbox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.command_textbox.setPlaceholderText("Commands, device responses and errors will appear here during configuration transmission…")
+        command_panel_layout.addWidget(self.command_textbox)
+        command_panel.setMinimumHeight(170)
+        command_panel.setMaximumHeight(16777215)
+        command_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.command_panel = command_panel
+
+        # Add command management and execution feedback directly to the
+        # original CFG editor tab bar. This preserves the editor's existing
+        # parameter tabs and all callbacks while consolidating navigation.
+        cfg_commands_page = QWidget()
+        cfg_commands_layout = QVBoxLayout(cfg_commands_page)
+        cfg_commands_layout.setContentsMargins(8, 8, 8, 8)
+        cfg_commands_layout.setSpacing(6)
+        cfg_commands_heading = QLabel("Commands generated from the current configuration")
+        cfg_commands_heading.setObjectName("PageDescription")
+        command_table.setMinimumHeight(120)
+        command_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        cfg_commands_layout.addWidget(cfg_commands_heading)
+        cfg_commands_layout.addWidget(command_table, 1)
+        save_cfg_button.setObjectName("SecondaryButton")
+        save_cfg_button.setMinimumHeight(34)
+        cfg_commands_layout.addWidget(save_cfg_button)
+        self.tab_widget_cfg.addTab(cfg_commands_page, "CFG Commands & Save")
+        self.tab_widget_cfg.addTab(command_panel, "Command Execution Log")
 
         # Overview page with useful live values derived from the existing model.
         self.dashboard_page = self._create_dashboard_page()
 
+        dashboard_scroll = QScrollArea()
+        dashboard_scroll.setWidgetResizable(True)
+        dashboard_scroll.setFrameShape(QFrame.NoFrame)
+        dashboard_scroll.setWidget(self.dashboard_page)
+
+        # Visualization is deliberately not inserted into the main page stack.
+        # It opens as a dedicated second top-level window so plots and the
+        # point-cloud view can use the full display without shrinking the
+        # configuration workspace.
+        self._main_page_index_by_nav = {0: 0, 1: 1, 2: 2}
         pages = [
-            ("Overview", self.dashboard_page),
-            ("Configuration", config_page),
-            ("Live Radar", live_page),
-            ("Diagnostics", diagnostics_page),
+            ("Radar Control", live_page),
+            ("Device Setup", config_page),
+            ("Overview", dashboard_scroll),
         ]
-        for index, (name, page) in enumerate(pages):
+        nav_names = ["Radar Control", "Device Setup", "Overview"]
+        for nav_index, (name, page) in enumerate(zip(nav_names, pages)):
             button = QPushButton(name)
             button.setObjectName("NavButton")
             button.setCheckable(True)
-            button.clicked.connect(lambda checked=False, i=index: self._select_page(i))
-            side_layout.addWidget(button)
+            button.setMinimumHeight(38)
+            button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+            stack_index = nav_index
+            button.clicked.connect(
+                lambda checked=False, i=stack_index, n=nav_index: self._select_page(i, n)
+            )
+            self.page_stack.addWidget(page[1])
             self.navigation_buttons.append(button)
-            self.page_stack.addWidget(page)
-        side_layout.addStretch(1)
 
-        version = QLabel("SPARC · v2.0")
-        version.setObjectName("VersionLabel")
-        side_layout.addWidget(version)
+        shell_layout.addWidget(self.page_stack, 1)
+        self._visualization_window = None
+        self._allow_visualization_close = False
 
-        body_layout.addWidget(sidebar)
-        body_layout.addWidget(self.page_stack, 1)
-        shell_layout.addWidget(body, 1)
+        # Bottom workspace navigation: all former sidebar elements (caption,
+        # page buttons and version label) are consolidated in this footer.
+        bottom_navigation = QFrame()
+        bottom_navigation.setObjectName("BottomNavigation")
+        bottom_navigation.setMinimumHeight(62)
+        bottom_navigation.setMaximumHeight(72)
+        bottom_layout = QHBoxLayout(bottom_navigation)
+        bottom_layout.setContentsMargins(16, 8, 18, 8)
+        bottom_layout.setSpacing(8)
+
+        nav_caption = QLabel("WORKSPACE")
+        nav_caption.setObjectName("BottomNavCaption")
+        bottom_layout.addWidget(nav_caption)
+        bottom_layout.addSpacing(8)
+        for button in self.navigation_buttons:
+            bottom_layout.addWidget(button)
+        bottom_layout.addStretch(1)
+
+        version = QLabel("SPARC  ·  v2.0")
+        version.setObjectName("BottomVersionLabel")
+        bottom_layout.addWidget(version, 0, Qt.AlignVCenter)
+        shell_layout.addWidget(bottom_navigation)
         self.setCentralWidget(shell)
         self._select_page(0)
-
-        # Keep the legacy baud-rate selectors available, but move them out of
-        # the always-visible header. They remain accessible under Diagnostics.
-        advanced_bar = QFrame()
-        advanced_bar.setObjectName("AdvancedBar")
-        adv_layout = QHBoxLayout(advanced_bar)
-        adv_layout.setContentsMargins(12, 6, 12, 6)
-        adv_layout.addWidget(QLabel("Advanced serial settings"))
-        adv_layout.addWidget(self._field_label("Command baud rate"))
-        adv_layout.addWidget(self.select_commad_baudrate_combo_box)
-        adv_layout.addWidget(self._field_label("Data baud rate"))
-        adv_layout.addWidget(self.select_data_baudrate_combo_box)
-        adv_layout.addStretch(1)
-        diagnostics_layout.addWidget(advanced_bar)
+        self.connect_button.setEnabled(True)
+        # Sending is only available after both UART ports are connected and a
+        # configuration is present. A preloaded default preset alone must not
+        # make the action look ready at application startup.
+        self.send_button.setText("Send configuration + start")
+        self.send_button.setEnabled(False)
+        self.send_button.setToolTip("Connect both radar serial ports before starting the sensor.")
+        self.send_button.setIcon(QIcon())
+        self.send_button.setAutoDefault(False)
+        self.send_button.setDefault(False)
+        self.stop_device_button.setEnabled(False)
+        self._refresh_action_states()
 
         # The previous central widget is now empty of all reparented content.
         if old_central is not None:
             old_central.deleteLater()
 
+    def _refresh_action_states(self):
+        """Keep operation controls synchronized with device/configuration state."""
+        connected = bool(
+            getattr(self, "command_port_connected", False)
+            and getattr(self, "data_port_connected", False)
+        )
+        has_configuration = bool(
+            getattr(self, "command_table", None) is not None
+            and self.command_table.rowCount() > 0
+        )
+        ready = connected and has_configuration
+        if hasattr(self, "send_button"):
+            self.send_button.setEnabled(ready)
+            if not connected:
+                reason = "Connect both command and data ports to enable this action."
+            elif not has_configuration:
+                reason = "Load a CFG file or select a configuration preset first."
+            else:
+                reason = "Send the loaded configuration and start radar acquisition."
+            self.send_button.setToolTip(reason)
+        if hasattr(self, "stop_device_button"):
+            running = bool(getattr(self, "sensor_running", False))
+            self.stop_device_button.setEnabled(connected and running)
+
     def attach_radar_visualizations(self, radar_application):
-        """Embed the three live signal plots in the Live Radar workspace."""
-        from .plot_workspace import PlotWorkspace
+        """Add each live signal plot as an individual tab in Visualization."""
+        from .plot_workspace import PlotPanel
 
-        if getattr(self, "plot_workspace", None) is not None:
-            self.live_tabs.removeTab(self.live_tabs.indexOf(self.plot_workspace))
-            self.plot_workspace.deleteLater()
+        # Remove previously attached signal-plot tabs before rebuilding them.
+        plot_titles = {"Range Profile", "Range-Doppler", "Range-Azimuth"}
+        for index in reversed(range(self.visualization_tabs.count())):
+            if self.visualization_tabs.tabText(index) in plot_titles:
+                widget = self.visualization_tabs.widget(index)
+                self.visualization_tabs.removeTab(index)
+                # Detach the Matplotlib/Qt plot before deleting its old panel;
+                # otherwise deleting the panel would also destroy the plot.
+                if hasattr(widget, "plot_widget"):
+                    widget.plot_layout.removeWidget(widget.plot_widget)
+                    widget.plot_widget.setParent(None)
+                widget.deleteLater()
 
-        self.plot_workspace = PlotWorkspace(self)
-        self.plot_workspace.add_plot(
-            "Range Profile", radar_application.range_profile_figure,
-            "Range profile and noise profile across the measured range.",
-            "range_profile",
-        )
-        self.plot_workspace.add_plot(
-            "Range-Doppler", radar_application.range_doppler_heatmap_figure,
-            "Range versus radial velocity; Doppler bins are centered around zero.",
-            "range_doppler",
-        )
-        self.plot_workspace.add_plot(
-            "Range-Azimuth", radar_application.range_azimuth_heatmap_figure,
-            "Static range-angle response across the radar field of view.",
-            "range_azimuth",
-        )
-        self.live_tabs.insertTab(0, self.plot_workspace, "Signal Analysis")
-        self.live_tabs.setCurrentWidget(self.plot_workspace)
+        plot_definitions = [
+            ("Range Profile", radar_application.range_profile_figure,
+             "Range profile and noise profile across the measured range."),
+            ("Range-Doppler", radar_application.range_doppler_heatmap_figure,
+             "Range versus radial velocity; Doppler bins are centered around zero."),
+            ("Range-Azimuth", radar_application.range_azimuth_heatmap_figure,
+             "Static range-angle response across the radar field of view."),
+        ]
+        # Keep signal-analysis tabs first, followed by the 3D view and table.
+        for index, (title, plot_widget, description) in enumerate(plot_definitions):
+            panel = PlotPanel(title, plot_widget, description, title.lower().replace(" ", "_"))
+            self.visualization_tabs.insertTab(index, panel, title)
+        self.visualization_tabs.setCurrentIndex(0)
+
+    def open_point_cloud_viewer(self):
+        """Pop the live 3D point-cloud widget into a standalone viewer window."""
+        if getattr(self, "_point_cloud_dialog", None) is not None:
+            self._point_cloud_dialog.raise_()
+            self._point_cloud_dialog.activateWindow()
+            return
+        widget = getattr(self, "three_d_plot_widget", None)
+        if widget is None:
+            return
+        self.three_d_plot_layout.removeWidget(widget)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("SPARC mmWave Studio — 3D Point Cloud Viewer")
+        dialog.setWindowFlag(Qt.Window, True)
+        dialog.setMinimumSize(800, 600)
+        dialog_layout = QVBoxLayout(dialog)
+        dialog_layout.setContentsMargins(8, 8, 8, 8)
+        dialog_layout.addWidget(widget)
+        self._point_cloud_dialog = dialog
+
+        def restore_point_cloud(_result=None):
+            if getattr(self, "_point_cloud_dialog", None) is not dialog:
+                return
+            dialog_layout.removeWidget(widget)
+            widget.setParent(self.three_d_plot_tab)
+            self.three_d_plot_layout.addWidget(widget)
+            self._point_cloud_dialog = None
+
+        dialog.finished.connect(restore_point_cloud)
+        dialog.showMaximized()
+
+    def update_command_execution(self, status=None, progress=None, progress_text=None):
+        """Update the command sequence feedback available under Diagnostics → Command Log."""
+        if status is not None and hasattr(self, "command_execution_status"):
+            self.command_execution_status.setText(status)
+        if progress is not None and hasattr(self, "command_progress"):
+            self.command_progress.setValue(max(0, min(100, int(progress))))
+        if progress_text is not None and hasattr(self, "command_progress"):
+            self.command_progress.setFormat(progress_text)
+
+    @staticmethod
+    def _header_selector(caption, combo, object_name):
+        """Build a compact selector group integrated into the global header."""
+        group = QFrame()
+        group.setObjectName(object_name)
+        group.setMinimumWidth(158 if object_name == "PlatformSelector" else 220)
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        label = QLabel(caption)
+        label.setObjectName("HeaderFieldCaption")
+        layout.addWidget(label)
+        combo.setMinimumHeight(34)
+        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        layout.addWidget(combo)
+        return group
 
     @staticmethod
     def _field_label(text):
@@ -282,6 +585,19 @@ class MainWindow(LegacyMainWindow):
             ("velocity", "Unambiguous velocity", "—"),
             ("frame_period", "Frame periodicity", "—"),
             ("active_time", "Active frame time", "—"),
+            ("idle_time", "Idle time", "—"),
+            ("frame_utilization", "Frame duty cycle", "—"),
+            ("rf_duty", "Aggregate RF duty cycle (est.)", "—"),
+            ("configured_fps", "Configured frame rate", "—"),
+            ("chirp_cycle", "Chirp repetition period", "—"),
+            ("ramp_duration", "RF ramp duration", "—"),
+            ("chirp_rf_duty", "RF ramp duty cycle / chirp", "—"),
+            ("adc_acquisition", "ADC acquisition duration", "—"),
+            ("adc_duty", "ADC acquisition duty / chirp", "—"),
+            ("chirps", "Chirps per frame", "—"),
+            ("tx1_duty", "TX1 duty cycle (est.)", "—"),
+            ("tx2_duty", "TX2 duty cycle (est.)", "—"),
+            ("tx3_duty", "TX3 duty cycle (est.)", "—"),
         ]
         for index, (key, label_text, initial) in enumerate(metrics):
             card = QFrame()
@@ -290,14 +606,69 @@ class MainWindow(LegacyMainWindow):
             card_layout.setContentsMargins(15, 13, 15, 13)
             caption = QLabel(label_text)
             caption.setObjectName("MetricCaption")
+            caption.setWordWrap(True)
             value = QLabel(initial)
             value.setObjectName("MetricValue")
             value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            if key == "frame_utilization":
+                caption.setToolTip("Active frame time divided by frame periodicity. This is the frame-level duty cycle.")
+                value.setToolTip("Frame duty cycle = active frame time / frame period × 100%.")
+            elif key == "rf_duty":
+                caption.setToolTip("Estimated aggregate RF-on time across configured chirps. This is not a per-transmitter duty-cycle measurement.")
+                value.setToolTip("Estimated aggregate RF duty cycle = chirps per frame × ramp duration / frame period × 100%.")
+            elif key == "chirp_rf_duty":
+                caption.setToolTip("Ramp duration divided by chirp repetition period. This is a timing ratio, not a direct PA-on measurement.")
+            elif key == "adc_duty":
+                caption.setToolTip("ADC acquisition window divided by chirp repetition period. This is receiver sampling activity, not TX duty cycle.")
             card_layout.addWidget(caption)
             card_layout.addWidget(value)
             cards.addWidget(card, index // 3, index % 3)
             self.dashboard_values[key] = value
         layout.addLayout(cards)
+
+        runtime_title = QLabel("Live acquisition performance")
+        runtime_title.setObjectName("PanelTitle")
+        layout.addWidget(runtime_title)
+        runtime_cards = QGridLayout()
+        runtime_cards.setHorizontalSpacing(12)
+        runtime_cards.setVerticalSpacing(10)
+        self.runtime_dashboard_values = {}
+        runtime_metrics = [
+            ("measured_fps", "Measured FPS"),
+            ("avg_interval", "Average frame interval"),
+            ("jitter", "Frame interval jitter"),
+            ("minmax_interval", "Min / max interval"),
+            ("missing_frames", "Missing frame numbers"),
+            ("throughput", "Data throughput"),
+            ("receive_state", "Data reception"),
+        ]
+        for index, (key, caption_text) in enumerate(runtime_metrics):
+            card = QFrame()
+            card.setObjectName("MetricCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 9, 12, 9)
+            caption = QLabel(caption_text)
+            caption.setObjectName("MetricCaption")
+            caption.setWordWrap(True)
+            value = QLabel("—")
+            value.setObjectName("MetricValue")
+            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            card_layout.addWidget(caption)
+            card_layout.addWidget(value)
+            runtime_cards.addWidget(card, index // 4, index % 4)
+            self.runtime_dashboard_values[key] = value
+        layout.addLayout(runtime_cards)
+        timing_note = QLabel(
+            "Per-chirp RF ramp duty = ramp duration / chirp repetition period. ADC acquisition duty = "
+            "ADC sampling duration / chirp repetition period. Frame duty = active frame time / frame period. "
+            "Aggregate RF duty is an estimate based on chirps per frame × ramp duration / frame period; "
+            "it assumes the ramp is RF-active and is not a per-transmitter PA-on measurement. ADC duty "
+            "describes receiver sampling, not transmitter activity. Live intervals are measured at complete "
+            "UART packet reception and may include interface buffering."
+        )
+        timing_note.setObjectName("PageDescription")
+        timing_note.setWordWrap(True)
+        layout.addWidget(timing_note)
 
         note = QFrame()
         note.setObjectName("InfoPanel")
@@ -306,10 +677,11 @@ class MainWindow(LegacyMainWindow):
         note_title = QLabel("Getting started")
         note_title.setObjectName("PanelTitle")
         note_text = QLabel(
-            "1. Select the radar platform and configuration preset above.\n"
-            "2. Open Configuration → Ports & Console and select the command/data ports.\n"
-            "3. Load a TI .cfg file, connect to the sensor, then send the configuration.\n"
-            "4. Use Live Radar and Diagnostics to inspect incoming frames."
+            "1. Load and edit a TI .cfg file directly on the Radar Control page.\n"
+            "2. Select command and data COM ports under Device Setup.\n"
+            "3. Use Connect device and Send configuration & start on the same Radar Control page.\n"
+            "4. Open Visualization to view signal plots, the 3D point cloud and detections in a separate window.\n"
+            "5. Open Diagnostics → Command Log only when you need the detailed UART transcript."
         )
         note_text.setObjectName("PanelText")
         note_text.setWordWrap(True)
@@ -319,10 +691,64 @@ class MainWindow(LegacyMainWindow):
         layout.addStretch(1)
         return page
 
-    def _select_page(self, index):
+    def _select_page(self, index, nav_index=None):
+        """Select a main-window page while keeping Visualization independent."""
         self.page_stack.setCurrentIndex(index)
+        if nav_index is None:
+            nav_index = next(
+                (nav_i for nav_i, stack_i in self._main_page_index_by_nav.items()
+                 if stack_i == index), 0
+            )
         for i, button in enumerate(self.navigation_buttons):
-            button.setChecked(i == index)
+            button.setChecked(i == nav_index)
+
+    def open_visualization_window(self):
+        """Show the persistent companion visualization window."""
+        if self._visualization_window is None:
+            from PyQt5.QtWidgets import QMainWindow
+
+            # Deliberately omit the native close-button hint. The close event
+            # is also ignored so Alt+F4 or a window-manager close request cannot
+            # terminate the companion window independently of the main app.
+            window_flags = (
+                Qt.Window | Qt.WindowTitleHint
+                | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint
+            )
+            window = QMainWindow(self, window_flags)
+            window.setWindowTitle("SPARC | Radar Visualization")
+            window.setMinimumSize(900, 650)
+            window.resize(1450, 900)
+            window.setAttribute(Qt.WA_DeleteOnClose, False)
+            window.setCentralWidget(self.visualization_page)
+            window.closeEvent = self._ignore_visualization_close
+            self._visualization_window = window
+
+        self._visualization_window.showMaximized()
+        self._visualization_window.raise_()
+        self._visualization_window.activateWindow()
+        return self._visualization_window
+
+    def _ignore_visualization_close(self, event):
+        """Keep the companion visualization open until the main app exits."""
+        if self._allow_visualization_close:
+            event.accept()
+        else:
+            event.ignore()
+            if self._visualization_window is not None:
+                self._visualization_window.show()
+                self._visualization_window.raise_()
+
+    def close_visualization_for_shutdown(self):
+        """Close the companion window as part of main-application shutdown."""
+        if self._visualization_window is not None:
+            self._allow_visualization_close = True
+            self._visualization_window.close()
+            self._visualization_window = None
+
+    def set_runtime_statistics_provider(self, provider):
+        """Attach the thread-safe runtime statistics snapshot provider."""
+        self._runtime_statistics_provider = provider
+        self._refresh_dashboard()
 
     def _refresh_dashboard(self):
         params = getattr(self, "radar_params", {}) or {}
@@ -340,47 +766,152 @@ class MainWindow(LegacyMainWindow):
         self.dashboard_values["range_resolution"].setText(display("Range Resolution [m]", " m", 3))
         self.dashboard_values["velocity"].setText(display("Unambiguous Velocity [km/h]", " km/h"))
         self.dashboard_values["frame_period"].setText(display("Frame Periodicity [ms]", " ms"))
-        self.dashboard_values["active_time"].setText(display("Active Frame Time [ms]", " ms"))
+
+        timing = calculate_timing_metrics(params)
+        self.dashboard_values["active_time"].setText(f"{timing['active_frame_ms']:.3f} ms" if timing['active_frame_ms'] else "—")
+        if timing["frame_period_ms"]:
+            if timing["frame_overrun"]:
+                self.dashboard_values["idle_time"].setText(f"Overrun {abs(timing['idle_time_ms']):.3f} ms")
+            else:
+                self.dashboard_values["idle_time"].setText(f"{timing['idle_time_ms']:.3f} ms")
+        else:
+            self.dashboard_values["idle_time"].setText("—")
+        self.dashboard_values["frame_utilization"].setText(f"{timing['frame_utilization_pct']:.1f} %" if timing['frame_period_ms'] else "—")
+        self.dashboard_values["rf_duty"].setText(f"{timing['estimated_rf_duty_pct']:.1f} %*" if timing['estimated_rf_duty_pct'] else "—")
+        self.dashboard_values["configured_fps"].setText(f"{timing['configured_fps']:.2f} FPS" if timing['configured_fps'] else "—")
+        self.dashboard_values["chirp_cycle"].setText(f"{timing['chirp_cycle_us']:.3f} µs" if timing['chirp_cycle_us'] else "—")
+        self.dashboard_values["ramp_duration"].setText(f"{timing['ramp_duration_us']:.3f} µs" if timing['ramp_duration_us'] else "—")
+        self.dashboard_values["chirp_rf_duty"].setText(f"{timing['chirp_rf_duty_pct']:.2f} %*" if timing['chirp_rf_duty_pct'] else "—")
+        self.dashboard_values["adc_acquisition"].setText(f"{timing['adc_acquisition_us']:.3f} µs" if timing['adc_acquisition_us'] else "—")
+        self.dashboard_values["adc_duty"].setText(f"{timing['adc_duty_pct']:.2f} %" if timing['adc_duty_pct'] else "—")
+        self.dashboard_values["chirps"].setText(str(timing['chirps_per_frame']) if timing['chirps_per_frame'] else "—")
+        for key, metric_key in (("tx1_duty", "tx1_duty_pct"), ("tx2_duty", "tx2_duty_pct"), ("tx3_duty", "tx3_duty_pct")):
+            duty = timing[metric_key]
+            self.dashboard_values[key].setText(f"{duty:.2f} %*" if duty else "—")
+
+        provider = getattr(self, "_runtime_statistics_provider", None)
+        if provider is not None:
+            stats = provider()
+            self.runtime_dashboard_values["measured_fps"].setText(f"{stats['measured_fps']:.2f} FPS" if stats['frames_received'] > 1 else "—")
+            self.runtime_dashboard_values["avg_interval"].setText(f"{stats['average_interval_ms']:.2f} ms" if stats['average_interval_ms'] else "—")
+            self.runtime_dashboard_values["jitter"].setText(f"{stats['interval_jitter_ms']:.2f} ms" if stats['average_interval_ms'] else "—")
+            self.runtime_dashboard_values["minmax_interval"].setText(
+                f"{stats['minimum_interval_ms']:.1f} / {stats['maximum_interval_ms']:.1f} ms" if stats['average_interval_ms'] else "—")
+            self.runtime_dashboard_values["missing_frames"].setText(str(stats['missing_frames']))
+            self.runtime_dashboard_values["throughput"].setText(f"{stats['throughput_kBps']:.1f} kB/s")
+            self.runtime_dashboard_values["receive_state"].setText("Receiving" if stats['is_receiving'] else "No recent data")
+        else:
+            for value in self.runtime_dashboard_values.values():
+                value.setText("Waiting for radar data")
 
     def _apply_theme(self):
+        """Apply a consistent contemporary engineering-dashboard visual theme."""
         self.setStyleSheet("""
-            QMainWindow, QWidget { background: #f4f6f9; color: #1f2937; font-family: 'Segoe UI', Arial; font-size: 10pt; }
-            #AppHeader { background: #ffffff; border-bottom: 1px solid #dce2ea; }
-            #AppTitle { color: #14263d; font-size: 17pt; font-weight: 700; }
-            #AppSubtitle { color: #64748b; font-size: 9pt; }
-            #ActionBar { background: #ffffff; border-bottom: 1px solid #dce2ea; }
-            #Sidebar { background: #172b45; border-radius: 10px; }
-            #NavCaption { color: #9fb1c8; font-size: 8pt; font-weight: 700; padding: 4px 10px 10px; }
-            QPushButton#NavButton { color: #dbe6f2; background: transparent; border: 0; border-radius: 6px; text-align: left; padding: 11px 12px; font-weight: 600; }
-            QPushButton#NavButton:hover { background: #29415f; }
-            QPushButton#NavButton:checked { background: #31577e; color: #ffffff; }
-            #VersionLabel { color: #9fb1c8; font-size: 8pt; padding: 8px; }
-            #RadarPlotPanel { background: #ffffff; border: 1px solid #dce3ec; border-radius: 9px; }
-            #RadarPlotTitle { color: #14263d; font-size: 11pt; font-weight: 700; }
-            #RadarPlotDescription { color: #64748b; font-size: 8pt; }
-            QPushButton#PlotFloatButton { color: #1769aa; background: #f4f8fc; border: 1px solid #cbdced; padding: 5px 10px; }
-            QPushButton#PlotFloatButton:hover { background: #e7f1fa; }
-            #PageStack { background: #ffffff; border: 1px solid #e1e6ed; border-radius: 9px; }
-            #PageHeading { color: #14263d; font-size: 19pt; font-weight: 700; }
-            #PageDescription { color: #64748b; }
-            #MetricCard { background: #ffffff; border: 1px solid #e1e6ed; border-radius: 9px; }
-            #MetricCaption { color: #64748b; font-size: 9pt; }
-            #MetricValue { color: #14263d; font-size: 17pt; font-weight: 700; }
-            #InfoPanel { background: #f8fafc; border: 1px solid #e1e6ed; border-radius: 9px; }
-            #PanelTitle { color: #14263d; font-weight: 700; }
-            #PanelText { color: #475569; line-height: 1.5; }
-            #FieldLabel { color: #64748b; font-size: 9pt; }
-            #AdvancedBar { background: #f8fafc; border: 1px solid #e1e6ed; border-radius: 7px; }
-            QPushButton { padding: 7px 12px; border: 1px solid #cbd5e1; border-radius: 6px; background: #ffffff; }
-            QPushButton:hover { background: #eef4fa; }
-            QPushButton#PrimaryButton { color: white; background: #1769aa; border-color: #1769aa; font-weight: 700; }
-            QPushButton#PrimaryButton:hover { background: #12598f; }
-            QPushButton#DangerButton { color: #a12b2b; }
-            QComboBox, QLineEdit { background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 6px; min-width: 90px; }
-            QTabWidget::pane { border: 1px solid #e1e6ed; background: #ffffff; }
-            QTabBar::tab { background: #edf1f5; padding: 8px 13px; margin-right: 2px; }
-            QTabBar::tab:selected { background: #ffffff; color: #1769aa; border-bottom: 2px solid #1769aa; }
-            QTableWidget, QPlainTextEdit { background: #ffffff; alternate-background-color: #f8fafc; gridline-color: #e2e8f0; }
-            QHeaderView::section { background: #edf2f7; padding: 6px; border: 0; border-bottom: 1px solid #d8e0e9; font-weight: 600; }
-            QStatusBar { background: #ffffff; border-top: 1px solid #dce2ea; }
+            QMainWindow, QWidget {
+                background: #f4f6fa;
+                color: #182438;
+                font-family: "Segoe UI", "Inter", Arial;
+                font-size: 10pt;
+            }
+            #AppHeader {
+                background: #ffffff;
+                border: 0;
+                border-bottom: 1px solid #dfe6ef;
+            }
+            #BrandLogo { background: transparent; }
+            #AppTitle { color: #15243a; font-size: 20pt; font-weight: 700; }
+            #AppSubtitle { color: #78869a; font-size: 8.5pt; }
+            #HeaderSeparator { color: #e1e7ef; background: #e1e7ef; max-width: 1px; }
+            #PlatformSelector, #PresetSelector { background: transparent; border: 0; }
+            #HeaderFieldCaption { color: #718096; font-size: 7.5pt; font-weight: 700; letter-spacing: 0.6px; }
+            #BottomNavigation {
+                background: #17283f;
+                border-top: 1px solid #263d59;
+            }
+            #BottomNavCaption {
+                color: #91a4bb; font-size: 8pt; font-weight: 700;
+                letter-spacing: 0.8px; padding: 0 8px;
+            }
+            QPushButton#NavButton {
+                color: #c7d2e0; background: transparent; border: 0;
+                border-radius: 7px; text-align: center; padding: 8px 17px;
+                font-weight: 600; min-width: 92px;
+            }
+            QPushButton#NavButton:hover { background: #243b57; color: #ffffff; }
+            QPushButton#NavButton:checked { background: #31577b; color: #ffffff; }
+            #BottomVersionLabel {
+                color: #91a4bb; font-size: 8pt; padding: 0 8px;
+            }
+            #PageStack { background: #f4f6fa; border: 0; }
+            #PageHeading { color: #15243a; font-size: 21pt; font-weight: 700; }
+            #PageDescription { color: #738198; font-size: 9pt; }
+            #WorkflowPanel, #MetricCard, #RadarPlotPanel, #CommandPanel, #InfoPanel {
+                background: #ffffff; border: 1px solid #e3e9f1; border-radius: 11px;
+            }
+            #PanelTitle, #RadarPlotTitle { color: #1a2a40; font-weight: 700; font-size: 9pt; }
+            #PanelText { color: #53647b; }
+            #MetricCaption { color: #75849a; font-size: 9pt; }
+            #MetricValue { color: #172b45; font-size: 15pt; font-weight: 700; }
+            #FieldLabel { color: #697991; font-size: 9pt; font-weight: 600; }
+            #RadarPlotDescription { color: #7b899d; font-size: 8pt; }
+            #ExecutionStatus { color: #52657e; font-size: 9pt; font-weight: 600; }
+            #AdvancedBar { background: #ffffff; border: 1px solid #e3e9f1; border-radius: 9px; }
+            QPushButton {
+                color: #34445b; background: #ffffff;
+                border: 1px solid #d8e0eb; border-radius: 8px;
+                padding: 9px 14px; font-weight: 600;
+            }
+            QPushButton:hover { background: #f2f6fb; border-color: #bdcadb; }
+            QPushButton:pressed { background: #e8eef6; }
+            QPushButton:disabled {
+                color: #9aa6b6; background: #edf0f4;
+                border: 1px solid #e3e7ed;
+            }
+            QPushButton#PrimaryButton {
+                color: #ffffff; background: #1769aa;
+                border: 1px solid #1769aa; border-radius: 8px;
+                font-weight: 700; padding: 10px 17px;
+            }
+            QPushButton#PrimaryButton:hover { background: #125b96; border-color: #125b96; }
+            QPushButton#PrimaryButton:pressed { background: #0e4d80; }
+            QPushButton#PrimaryButton:disabled {
+                color: #8d99a8; background: #e9edf2;
+                border-color: #dce2e9;
+            }
+            QPushButton#SecondaryButton {
+                color: #315b83; background: #f5f8fc;
+                border: 1px solid #d8e3ef; font-weight: 600;
+            }
+            QPushButton#SecondaryButton:hover { background: #eaf1f8; }
+            QPushButton#DangerButton { color: #b54747; background: #fffafa; border-color: #efdada; }
+            QPushButton#DangerButton:hover { background: #fff0f0; }
+            QPushButton#PlotFloatButton { color: #315b83; background: #f6f9fc; border: 1px solid #d8e3ef; padding: 6px 11px; }
+            QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
+                background: #ffffff; color: #26364d;
+                border: 1px solid #d6deea; border-radius: 7px;
+                padding: 7px 9px; min-height: 20px;
+            }
+            QComboBox:hover, QLineEdit:hover { border-color: #9eb2ca; }
+            QComboBox:focus, QLineEdit:focus { border: 1px solid #4384bd; }
+            QTabWidget { background: transparent; }
+            QTabWidget::pane { border: 1px solid #e2e8f0; background: #ffffff; border-radius: 8px; top: -1px; }
+            QTabBar { qproperty-drawBase: 0; }
+            QTabBar::tab { color: #65758b; background: transparent; padding: 9px 13px; min-width: 72px; min-height: 20px; margin-right: 3px; border: 0; border-bottom: 2px solid transparent; font-weight: 600; }
+            QTabBar::tab:selected { color: #1769aa; border-bottom: 2px solid #1769aa; }
+            QTabBar::tab:hover { color: #244e77; background: #f0f4f9; }
+            QTableWidget, QPlainTextEdit {
+                font-size: 9pt;
+                background: #ffffff; color: #26364d;
+                alternate-background-color: #f7f9fc;
+                gridline-color: #e8edf3; border: 1px solid #e0e6ee;
+                border-radius: 7px;
+            }
+            QHeaderView::section { background: #f3f6fa; color: #53647a; padding: 6px; border: 0; border-bottom: 1px solid #e0e6ee; font-weight: 700; }
+            QProgressBar#CommandProgress { border: 0; border-radius: 5px; background: #edf1f5; text-align: center; color: #42536a; min-height: 12px; }
+            QProgressBar#CommandProgress::chunk { background: #26966b; border-radius: 5px; }
+            QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+            QScrollBar::handle:vertical { background: #c7d1de; border-radius: 5px; min-height: 24px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QStatusBar { background: #ffffff; color: #66758a; border-top: 1px solid #e3e9f1; }
         """)
+
