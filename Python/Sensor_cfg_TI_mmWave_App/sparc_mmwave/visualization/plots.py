@@ -10,7 +10,8 @@ class RadarVisualizer:
 
     @staticmethod
     def generate_range_profile_plot():
-        figure = pg.plot(title='Range Profile')
+        figure = pg.PlotWidget()
+        figure.setTitle('Range Profile')
         figure.showGrid(x=True, y=True)
         figure.setLabel('bottom', 'Range [m]')
         figure.setLabel('left', 'Relative Power [dB]')
@@ -52,8 +53,9 @@ class RadarVisualizer:
             heatmap_plot: pyqtgraph.PlotWidget, the plot widget for the heatmap
             heatmap_item: pyqtgraph.ImageItem, the heatmap image item
         """
-        # Create a new plot window
-        heatmap_plot = pg.plot(title=title)
+        # Create an embeddable plot widget (never open a separate window).
+        heatmap_plot = pg.PlotWidget()
+        heatmap_plot.setTitle(title)
         heatmap_plot.setLabel('bottom', x_label)
         heatmap_plot.setLabel('left', y_label)
         heatmap_plot.showGrid(x=True, y=True)

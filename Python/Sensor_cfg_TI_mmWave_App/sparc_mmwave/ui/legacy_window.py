@@ -7,14 +7,14 @@ from PyQt5.QtGui import QPainter, QBrush
 from PyQt5.QtCore import Qt
 import serial
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
-from radar_calculator import RadarCalculator
+from ..core.radar_calculator import RadarCalculator
 from datetime import datetime
 from PyQt5.QtGui import QColor, QIcon
 import logging
 import pyqtgraph.opengl as gl
 import numpy as np
 
-icon_path = os.path.join("/home/bobo/sparcprojects_notes/Sensor_cfg_TI_mmWave_App/icon.png")
+icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "resources_icon.png")
 
 class CircleWidget(QWidget):
     def __init__(self, parent=None):
@@ -870,6 +870,8 @@ class MainWindow(QMainWindow, QWidget):
         # Flags to track connection status
         self.data_port_connected = False
         self.command_port_connected = False
+        # Tracks whether this application has successfully issued sensorStart.
+        self.sensor_running = False
         # self.data_port_ready = False
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1676,6 +1678,11 @@ class MainWindow(QMainWindow, QWidget):
                 # logging.info(full_command)
                 command_bytes = full_command.encode('latin1') + b'\n'
                 self.command_port.write(command_bytes)
+                normalized_command = first_part_command.lower()
+                if normalized_command == "sensorstart":
+                    self.sensor_running = True
+                elif normalized_command == "sensorstop":
+                    self.sensor_running = False
                 time.sleep(0.1)
 
                 # Read the response
@@ -1694,16 +1701,46 @@ class MainWindow(QMainWindow, QWidget):
         time.sleep(0.2)
 
     def stop_device(self):
-        self.command_port.write(b'sensorStop \n')
-        time.sleep(0.1)
+        """Stop RF/frame generation if the command UART is available."""
+        if not self.command_port_connected or not getattr(self, "command_port", None):
+            self.command_textbox.appendPlainText(
+                "Cannot send sensorStop: command port is not connected."
+            )
+            return False
+        try:
+            if not self.command_port.is_open:
+                self.command_textbox.appendPlainText(
+                    "Cannot send sensorStop: command port is closed."
+                )
+                return False
+            self.command_port.write(b"sensorStop\n")
+            self.command_port.flush()
+            time.sleep(0.15)
+            byte_count = self.command_port.in_waiting
+            if byte_count:
+                response = self.command_port.read(byte_count).decode(
+                    "latin1", errors="replace"
+                ).strip()
+                if response:
+                    self.command_textbox.appendPlainText(f"Stop response: {response}")
+            self.sensor_running = False
+            self.command_textbox.appendPlainText("Radar sensor stopped.")
+            return True
+        except Exception as exc:
+            self.command_textbox.appendPlainText(f"Failed to stop radar sensor: {exc}")
+            logging.exception("Failed to send sensorStop during device shutdown")
+            return False
 
-        # Read the response
-        byteCount = self.command_port.in_waiting
-        if byteCount > 0:
-            response_bytes = self.command_port.read(byteCount)
-            response_str = response_bytes.decode('latin1').strip().replace("\n", "\n\t")
-            print(response_str)
-            self.command_textbox.appendPlainText(f"Response : {response_str}")
+    def shutdown_device(self):
+        """Best-effort orderly shutdown: stop sensor, then release UART ports."""
+        stopped = True
+        if getattr(self, "sensor_running", False):
+            stopped = self.stop_device()
+        try:
+            self.disconnect_ports()
+        except Exception:
+            logging.exception("Error while disconnecting radar serial ports")
+        return stopped
 
     def on_plot_selection_toggled(self, state, row, param):
         """

@@ -59,7 +59,6 @@ def read_data(sensor):
         for frame in frame_contents:
             data_queue.put(frame)
 
-
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # processing class
@@ -99,7 +98,12 @@ def generate_iq_plot():
     ]
     plot_objects = [[] for _ in range(len(plots))]
     for j, (color, name) in enumerate(plots):
-        line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+        # line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+        line_style = {
+            'color': color,
+            'style': [QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenStyle.DashLine, QtCore.Qt.PenStyle.DotLine][0]
+        }
+
         plot_obj = plot.plot(pen=line_style, name=f'{name}')
         plot_obj.setVisible(True)
         plot_objects[j].append(plot_obj)
@@ -145,7 +149,7 @@ if __name__ == "__main__":
             pulse_width=3,
             rf_frequency_Hz=61044000000,
             rx_if_gain=8,
-            tx_power_level=4,
+            tx_power_level=7,
         )
         device.set_config(config)
 

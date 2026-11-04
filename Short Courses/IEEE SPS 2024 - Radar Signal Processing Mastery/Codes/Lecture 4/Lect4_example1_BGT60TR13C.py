@@ -367,7 +367,11 @@ def generate_range_profile_plot():
             plot_obj = plot.plot(pen=None, symbol='o', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=15,
                                  name=f'{name}')
         else:
-            line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+            # line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+            line_style = {
+                'color': color,
+                'style': [QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenStyle.DashLine, QtCore.Qt.PenStyle.DotLine][0]
+            }
             plot_obj = plot.plot(pen=line_style, name=f'{name}')
             plot_obj.setVisible(False)
         plot_objects[j].append(plot_obj)
@@ -416,7 +420,11 @@ def generate_phase_unwrap_plot():
     plot_objects = [[] for _ in range(len(plots))]
     # for i in range(num_rx_antennas):
     for j, (color, name) in enumerate(plots):
-        line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+        # line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+        line_style = {
+            'color': color,
+            'style': [QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenStyle.DashLine, QtCore.Qt.PenStyle.DotLine][0]
+        }
         plot_obj = plot.plot(pen=line_style, name=f'{name}')
         plot_obj.setVisible(False)
         plot_objects[j].append(plot_obj)
@@ -466,7 +474,11 @@ def generate_vitalsigns_spectrum_plot():
             plot_obj = plot.plot(pen=None, symbol='d', symbolPen=symbol_pen, symbolBrush=symbol_brush, symbolSize=15,
                                  name=f'{name}')
         else:
-            line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+            # line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+            line_style = {
+                'color': color,
+                'style': [QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenStyle.DashLine, QtCore.Qt.PenStyle.DotLine][0]
+            }
             plot_obj = plot.plot(pen=line_style, name=f'{name}')
         plot_obj.setVisible(False)
         plot_objects[j].append(plot_obj)
@@ -532,7 +544,11 @@ def generate_estimation_plot():
     plot_objects = [[] for _ in range(len(plots))]
     # for i in range(num_rx_antennas):
     for j, (color, name) in enumerate(plots):
-        line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+        # line_style = {'color': color, 'style': [QtCore.Qt.SolidLine, QtCore.Qt.DashLine, QtCore.Qt.DotLine][0]}
+        line_style = {
+            'color': color,
+            'style': [QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenStyle.DashLine, QtCore.Qt.PenStyle.DotLine][0]
+        }
         if name == 'Breathing ':
             symbol_pen = pg.mkPen(None)  # No border for the symbol
             symbol_brush = pg.mkBrush('g')  # Red color for the symbol

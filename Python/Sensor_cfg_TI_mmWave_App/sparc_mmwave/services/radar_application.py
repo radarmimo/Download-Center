@@ -2,8 +2,8 @@ import threading
 import time
 import queue
 import logging
-from payload import RadarDataParser
-from plots import RadarVisualizer
+from ..processing.payload import RadarDataParser
+from ..visualization.plots import RadarVisualizer
 import numpy as np
 from scipy.interpolate import griddata
 from scipy.ndimage import zoom

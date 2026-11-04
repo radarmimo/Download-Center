@@ -105,7 +105,7 @@ hold on;
 xlabel('Frequency (Hz)', 'FontSize', 14);
 ylabel('Magnitude (dB)', 'FontSize', 14);
 grid on;
-ylim([20, 40])
+ylim([0, 40])
 f = linspace(-sample_rate/2, sample_rate/2, nFFT); % Frequency vector
 box on
 
