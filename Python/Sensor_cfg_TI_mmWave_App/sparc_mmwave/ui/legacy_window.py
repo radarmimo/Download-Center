@@ -2,7 +2,7 @@ import time, random, os, math
 import serial.tools.list_ports
 from PyQt5.QtWidgets import QMainWindow, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, \
     QWidget, QCheckBox, QStatusBar, QLabel, QPlainTextEdit, QTabWidget, QHBoxLayout, QSpacerItem, QSizePolicy, \
-    QLineEdit, QComboBox
+    QLineEdit, QComboBox, QHeaderView
 from PyQt5.QtGui import QPainter, QBrush
 from PyQt5.QtCore import Qt
 import serial
@@ -110,6 +110,7 @@ class MainWindow(QMainWindow, QWidget):
             "Receive Antenna Gain [dB]": 7,
             "Transmit Power [dBm]": 12,
             "Maximum IF Frequency (MHz)": 10,
+            "Maximum RF Bandwidth [MHz]": 4000,
             "Maximum Complex ADC Sampling Rate [MSps]": 12.5,
             "Minimum Complex ADC Sampling Rate [MSps]": 2,
             "3dB Azimuth FOV [deg.]": 60,
@@ -178,6 +179,7 @@ class MainWindow(QMainWindow, QWidget):
             "Receive Antenna Gain [dB]": 7,
             "Transmit Power [dBm]": 12, #found
             "Maximum IF Frequency (MHz)": 5, #found
+            "Maximum RF Bandwidth [MHz]": 4000,
             "Maximum Complex ADC Sampling Rate [MSps]": 6.25, # use complex 1x
             "Minimum Complex ADC Sampling Rate [MSps]": 2,
             "3dB Azimuth FOV [deg.]": 60, #check from Antenna Pattern
@@ -238,6 +240,7 @@ class MainWindow(QMainWindow, QWidget):
             "Receive Antenna Gain [dB]": 7,
             "Transmit Power [dBm]": 12, #found
             "Maximum IF Frequency (MHz)": 10, #found
+            "Maximum RF Bandwidth [MHz]": 4000,
             "Maximum Complex ADC Sampling Rate [MSps]": 12.5, #found, (complex 1x)
             "Minimum Complex ADC Sampling Rate [MSps]": 2,
             "3dB Azimuth FOV [deg.]": 40, #use from Antenna Pattern
@@ -298,6 +301,7 @@ class MainWindow(QMainWindow, QWidget):
             "Receive Antenna Gain [dB]": 7,
             "Transmit Power [dBm]": 13.5,  # found
             "Maximum IF Frequency (MHz)": 15,  # found
+            "Maximum RF Bandwidth [MHz]": 5000,
             "Maximum Complex ADC Sampling Rate [MSps]": 37.5,  # found
             "Minimum Complex ADC Sampling Rate [MSps]": 2,  # found it okay
             "3dB Azimuth FOV [deg.]": 80,  # found not sure
@@ -529,10 +533,25 @@ class MainWindow(QMainWindow, QWidget):
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         self.field_of_view_table = QTableWidget()
         self.field_of_view_caption = QLabel("<font color='navy'><b>Azimuth, Elevation, Range & Velocity</b></font>")
-        self.field_of_view_table.setColumnCount(2)  # Two columns: Parameter and Value
-        self.field_of_view_table.setColumnWidth(0, 200)  # Set the width of the first column to 200 pixels
-        self.field_of_view_table.setColumnWidth(1, 500)
-        self.field_of_view_table.setHorizontalHeaderLabels(["Parameter", "Value"])
+        # Compact, aligned FOV editor: one parameter per row and separate Min/Max columns.
+        self.field_of_view_table.setColumnCount(3)
+        self.field_of_view_table.setHorizontalHeaderLabels(["Parameter", "Minimum", "Maximum"])
+        self.field_of_view_table.setAlternatingRowColors(True)
+        self.field_of_view_table.setShowGrid(False)
+        self.field_of_view_table.verticalHeader().setVisible(False)
+        self.field_of_view_table.setSelectionMode(QTableWidget.NoSelection)
+        self.field_of_view_table.setFocusPolicy(Qt.NoFocus)
+        self.field_of_view_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.field_of_view_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.field_of_view_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.field_of_view_table.setMinimumHeight(250)
+        self.field_of_view_table.setStyleSheet("""
+            QTableWidget { border: 1px solid #d8e0ea; border-radius: 7px; background: #ffffff;
+                           alternate-background-color: #f7f9fc; gridline-color: #e7ecf2; }
+            QHeaderView::section { background: #eef2f7; color: #34445a; font-weight: 600;
+                                   padding: 9px 12px; border: none; border-bottom: 1px solid #d8e0ea; }
+            QTableWidget::item { padding: 7px 10px; color: #26364a; }
+        """)
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         self.display_table = QTableWidget()
         self.display_caption = QLabel("<font color='magenta'><b>Display</b></font>")
@@ -725,6 +744,14 @@ class MainWindow(QMainWindow, QWidget):
         self.evm_param_table.setColumnWidth(0, 320)  # Set the width of the first column to 200 pixels
         self.evm_param_table.setColumnWidth(1, 380)
         self.evm_param_table.setHorizontalHeaderLabels(["Parameter", "Value"])
+
+        # Consistent, compact styling for configuration and information tables.
+        # Keep existing edit triggers and cell widgets intact; this is presentation-only.
+        self._style_configuration_table(self.chirp_cfg_table, editable=True, first_column=0)
+        self._style_configuration_table(self.radar_cfg_table, editable=False, first_column=0)
+        self._style_configuration_table(self.display_table, editable=True, first_column=0)
+        self._style_configuration_table(self.evm_param_table, editable=False, first_column=0)
+        self._style_configuration_table(self.command_table, editable=True, first_column=0, command_table=True)
 
         self.evm_layout_v1 = QVBoxLayout()
         self.evm_layout_v1.addWidget(self.evm_param_caption)
@@ -1070,12 +1097,17 @@ class MainWindow(QMainWindow, QWidget):
 
         # Define chirp parameters for various configurations
         chirp_params_map = {
-            (1, 'Phased-Array'): [['chirpCfg', '00000001'], ['chirpCfg', '11000001']],
-            (1, 'TDM-MIMO'): [['chirpCfg', '00000001'], ['chirpCfg', '11000000']],
-            (2, 'Phased-Array'): [['chirpCfg', '00000005'], ['chirpCfg', '11000005']],
+            # With one enabled TX, both multiplexing selections reduce to a
+            # single active chirp. Do not create a second chirp with TX mask 0.
+            (1, 'Phased-Array'): [['chirpCfg', '00000001']],
+            (1, 'TDM-MIMO'): [['chirpCfg', '00000001']],
+            # Phased-array mode: all selected TX antennas transmit the same
+            # chirp simultaneously. One chirpCfg definition is sufficient;
+            # do not create one identical chirp per TX (that would transmit
+            # the same beam repeatedly within the frame).
+            (2, 'Phased-Array'): [['chirpCfg', '00000005']],
             (2, 'TDM-MIMO'): [['chirpCfg', '00000001'], ['chirpCfg', '11000004']],
-            (3, 'Phased-Array'): [['chirpCfg', '00000007'], ['chirpCfg', '11000007'],
-                                  ['chirpCfg', '22000007']],
+            (3, 'Phased-Array'): [['chirpCfg', '00000007']],
             (3, 'TDM-MIMO'): [['chirpCfg', '00000001'], ['chirpCfg', '11000004'],
                               ['chirpCfg', '22000002']],
         }
@@ -1107,6 +1139,25 @@ class MainWindow(QMainWindow, QWidget):
             rows_to_remove = chirp_cfg_rows[num_required_rows:]  # Extra rows to delete
             for row_index in reversed(rows_to_remove):  # Remove from bottom to top
                 self.command_table.removeRow(row_index)
+
+        # frameCfg must span exactly the chirp indices generated above.
+        # TDM-MIMO has one chirp per TX; phased-array has one simultaneous
+        # multi-TX chirp. Preserve numLoops and all other frame timing fields.
+        frame_rows = self.get_command_rows('frameCfg')
+        if frame_rows and chirp_params:
+            frame_item = self.command_table.item(frame_rows[0], 1)
+            if frame_item:
+                frame_args = frame_item.text().split()
+                if len(frame_args) >= 3:
+                    frame_args[0] = '0'
+                    frame_args[1] = str(len(chirp_params) - 1)
+                    frame_item.setText(' '.join(frame_args))
+        radar_params['Chirp Configurations per Loop'] = len(chirp_params)
+
+        # bpmCfg is not needed for ordinary TDM-MIMO or phased-array operation
+        # and is unsupported by some IWR6843 mmwDemo CLI builds.
+        for bpm_row in reversed(self.get_command_rows('bpmCfg')):
+            self.command_table.removeRow(bpm_row)
 
         return True
 
@@ -1370,6 +1421,7 @@ class MainWindow(QMainWindow, QWidget):
             self.parse_commands_information("command_table", self.radar_params)
             selected_radar = self.select_radar_combo_box.currentText()
             self.set_tables_information(self.radar_params, selected_radar)
+            self._bandwidth_limit_status(show_warning=True)
 
             # Visually identify Scene Parameters that changed as a consequence
             # of this edit.  Use a consistent highlight (not random colours) so
@@ -1380,6 +1432,10 @@ class MainWindow(QMainWindow, QWidget):
             self.highlight_recalculated_parameters(
                 self.radar_cfg_table, changed_parameters, source_parameter=param
             )
+            # The bandwidth-limit warning has higher visual priority than the
+            # generic green recalculation highlight. Reapply it last so an
+            # over-limit bandwidth cell remains red after every parameter edit.
+            self._bandwidth_limit_status(show_warning=False)
 
             if hasattr(self, "_refresh_dashboard"):
                 self._refresh_dashboard()
@@ -1404,8 +1460,47 @@ class MainWindow(QMainWindow, QWidget):
                 )
             except Exception:
                 pass
-            QMessageBox.warning(self, "Configuration update",
-                                f"Could not apply this parameter change.\n\n{exc}")
+            error_text = str(exc)
+            if "ADC acquisition window extends beyond rampEndTime" in error_text:
+                # Give actionable alternatives using the restored, last-valid
+                # configuration. TI profileCfg uses sampleRate in ksps and
+                # ADC acquisition time = samples / sampleRate * 1000 us.
+                try:
+                    adc_start = float(self.radar_params.get("ADC Valid Start Time [us]", 0.0))
+                    sample_rate = float(self.radar_params.get("Sample Rate [KHz]", 0.0))
+                    samples = int(self.radar_params.get("Number of Samples per Chirp", 0))
+                    ramp_end = float(self.radar_params.get("Ramp End Time [us]", 0.0))
+                    if sample_rate > 0 and samples > 0:
+                        acquisition_us = samples / sample_rate * 1000.0
+                        suggested_ramp = adc_start + acquisition_us
+                        # Round upward to 0.01 us so the suggestion is not
+                        # marginally shorter due to display/float rounding.
+                        suggested_ramp = math.ceil((suggested_ramp + 0.01) * 100.0) / 100.0
+                        available_us = ramp_end - adc_start
+                        suggested_samples = max(1, int(math.floor(available_us * sample_rate / 1000.0 + 1e-12)))
+                        detail = (
+                            "The ADC sampling window must finish at or before rampEndTime.\n\n"
+                            f"Current ADC acquisition time: {acquisition_us:.2f} us\n"
+                            f"Current ramp end time: {ramp_end:.2f} us\n\n"
+                            "You can correct this in either of two ways:\n"
+                            f"• Increase Ramp End Time [us] to at least {suggested_ramp:.2f} us; or\n"
+                            f"• Keep the current ramp end time and reduce Number of Samples per Chirp to at most {suggested_samples}.\n\n"
+                            "These are minimum timing-compatible values; consider additional margin if required by your waveform design."
+                        )
+                    else:
+                        detail = (
+                            "The ADC sampling window must finish at or before rampEndTime. "
+                            "Increase Ramp End Time [us], or reduce Number of Samples per Chirp."
+                        )
+                except (TypeError, ValueError, OverflowError):
+                    detail = (
+                        "The ADC sampling window must finish at or before rampEndTime. "
+                        "Increase Ramp End Time [us], or reduce Number of Samples per Chirp."
+                    )
+                QMessageBox.warning(self, "Configuration update", detail)
+            else:
+                QMessageBox.warning(self, "Configuration update",
+                                    f"Could not apply this parameter change.\n\n{exc}")
         finally:
             self.chirp_cfg_table.blockSignals(chirp_signals)
             self.radar_cfg_table.blockSignals(scene_signals)
@@ -1504,6 +1599,95 @@ class MainWindow(QMainWindow, QWidget):
                 # Send the command using self.send_command
                 self.send_command(full_command)
 
+    def _maximum_device_bandwidth_mhz(self):
+        """Return the configured RF sweep-bandwidth limit for the selected EVM."""
+        selected = self.select_radar_combo_box.currentText()
+        specs = {
+            "IWR6843ISK": getattr(self, "IWR6843ISK", {}),
+            "IWR1843BOOST": getattr(self, "IWR1843BOOST", {}),
+            "AWR1642BOOST": getattr(self, "AWR1642BOOST", {}),
+            "AWR2944EVM": getattr(self, "AWR2944EVM", {}),
+        }
+        device_specs = specs.get(selected, {})
+        # The generic 4-GHz limit is deliberately conservative for devices
+        # whose RF bandwidth has not yet been entered in the EVM specification.
+        return float(device_specs.get("Maximum RF Bandwidth [MHz]", 4000.0))
+
+    def _bandwidth_limit_status(self, show_warning=False):
+        """Highlight an over-limit sweep bandwidth and explain valid adjustments."""
+        bandwidth = float(self.radar_params.get("Bandwidth [MHz]", 0) or 0)
+        limit = self._maximum_device_bandwidth_mhz()
+        table = getattr(self, "radar_cfg_table", None)
+        over_limit = bandwidth > limit + 1e-6
+        if table is not None:
+            for row in range(table.rowCount()):
+                name = table.item(row, 0)
+                if name is None or name.text().strip() != "Bandwidth [MHz]":
+                    continue
+                # Highlight the complete parameter row, not just the value
+                # cell. This makes the warning obvious in both compact and
+                # full-width table layouts. Reapply this after generic row
+                # recalculation highlights, which intentionally use green.
+                for column in range(table.columnCount()):
+                    cell = table.item(row, column)
+                    if cell is None:
+                        continue
+                    tooltip = (
+                        f"Sweep bandwidth {bandwidth:.1f} MHz exceeds the configured "
+                        f"device limit ({limit:.0f} MHz). Reduce frequency slope or ramp end time."
+                        if over_limit else
+                        f"Within device RF bandwidth limit ({limit:.0f} MHz)."
+                    )
+                    cell.setToolTip(tooltip)
+
+                # Qt style sheets can paint QTableWidget::item backgrounds over
+                # QTableWidgetItem.BackgroundRole on some platform styles. Use
+                # explicitly styled cell widgets for this read-only summary row
+                # so the warning colour is deterministic on Windows as well.
+                for column in range(table.columnCount()):
+                    item = table.item(row, column)
+                    if item is None:
+                        continue
+                    old_widget = table.cellWidget(row, column)
+                    if over_limit:
+                        label = QLabel(item.text())
+                        label.setAlignment(Qt.AlignVCenter | (Qt.AlignLeft if column == 0 else Qt.AlignRight))
+                        label.setContentsMargins(8, 0, 8, 0)
+                        label.setToolTip(
+                            f"Sweep bandwidth {bandwidth:.1f} MHz exceeds the configured "
+                            f"device limit ({limit:.0f} MHz). Reduce frequency slope or ramp end time."
+                        )
+                        label.setStyleSheet(
+                            "QLabel { background-color: #c62828; color: #ffffff; "
+                            "font-weight: 700; border: none; }"
+                        )
+                        table.setCellWidget(row, column, label)
+                    elif old_widget is not None and isinstance(old_widget, QLabel):
+                        table.removeCellWidget(row, column)
+                        old_widget.deleteLater()
+                        # Restore the model item after removing the overlay.
+                        item.setBackground(QBrush())
+                        item.setForeground(QBrush())
+                table.viewport().update()
+                break
+        if over_limit and show_warning:
+            slope = float(self.radar_params.get("Frequency Slope [MHz/us]", 0) or 0)
+            ramp = float(self.radar_params.get("Ramp End Time [us]", 0) or 0)
+            suggestions = []
+            if ramp > 0:
+                suggestions.append(f"Reduce Frequency Slope to at most {limit / ramp:.3f} MHz/us (keeping ramp end time at {ramp:.3f} us).")
+            if slope > 0:
+                suggestions.append(f"Reduce Ramp End Time to at most {limit / slope:.3f} us (keeping slope at {slope:.3f} MHz/us).")
+            detail = "\n".join(f"• {item}" for item in suggestions)
+            QMessageBox.warning(
+                self, "RF bandwidth limit exceeded",
+                f"Configured sweep bandwidth: {bandwidth:.1f} MHz\n"
+                f"Maximum for {self.select_radar_combo_box.currentText()}: {limit:.1f} MHz\n\n"
+                "Suggested corrections:\n" + detail +
+                "\n\nThe bandwidth value is highlighted in red until the configuration is within the limit."
+            )
+        return not over_limit
+
     def handle_cfg_update(self, calculated_params, cfgType):
         self.radar_params.update(calculated_params)
         self.on_apply_changes_to_cfg_file_push_button(update_commands=[cfgType])
@@ -1568,6 +1752,76 @@ class MainWindow(QMainWindow, QWidget):
                 # Update the table item
                 table.setItem(row, 1, item)
                 break
+
+    @staticmethod
+    def _style_configuration_table(table, editable=False, first_column=0, command_table=False):
+        """Apply a shared visual system without changing table data or callbacks."""
+        table.setAlternatingRowColors(True)
+        table.setShowGrid(False)
+        table.setWordWrap(False)
+        table.setCornerButtonEnabled(False)
+        table.verticalHeader().setVisible(True)
+        table.verticalHeader().setDefaultSectionSize(34)
+        table.verticalHeader().setMinimumWidth(30)
+        table.verticalHeader().setDefaultAlignment(Qt.AlignCenter)
+        table.horizontalHeader().setMinimumHeight(38)
+        table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        table.horizontalHeader().setStretchLastSection(False)
+        table.setStyleSheet("""
+            QTableWidget {
+                background: #ffffff;
+                alternate-background-color: #f7f9fc;
+                color: #243449;
+                border: 1px solid #d9e1eb;
+                border-radius: 7px;
+                gridline-color: transparent;
+                selection-background-color: #e8f1fc;
+                selection-color: #183b63;
+            }
+            QHeaderView::section {
+                background: #eef2f7;
+                color: #34445a;
+                font-weight: 600;
+                padding: 8px 10px;
+                border: none;
+                border-bottom: 1px solid #d9e1eb;
+            }
+            QHeaderView::section:vertical {
+                background: #f3f6fa;
+                color: #718096;
+                font-weight: 600;
+                border-right: 1px solid #e2e8f0;
+            }
+            QTableWidget::item {
+                padding: 5px 9px;
+                border-bottom: 1px solid #edf1f5;
+            }
+            QTableWidget QLineEdit, QTableWidget QComboBox {
+                min-height: 27px;
+                padding: 3px 7px;
+                border: 1px solid #cbd5e1;
+                border-radius: 4px;
+                background: #ffffff;
+                color: #243449;
+            }
+            QTableWidget QLineEdit:focus, QTableWidget QComboBox:focus {
+                border: 1px solid #4b83c3;
+            }
+            QTableWidget QCheckBox { spacing: 7px; padding-left: 8px; }
+        """)
+        if command_table:
+            table.setColumnWidth(0, 230)
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+            table.setMinimumHeight(190)
+        else:
+            table.horizontalHeader().setSectionResizeMode(first_column, QHeaderView.ResizeToContents)
+            if table.columnCount() > 1:
+                table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+            table.setMinimumHeight(180)
+        if not editable:
+            table.setSelectionMode(QTableWidget.NoSelection)
+            table.setFocusPolicy(Qt.NoFocus)
 
     def update_radar_parameters(self, bandwidth_MHz, range_resolution_m, freq_slope_MHz_us):
         """Update the radar parameters dictionary."""
@@ -2415,6 +2669,7 @@ class MainWindow(QMainWindow, QWidget):
             "Radar Cube Size [KB]": radar_params["Radar Cube Size [KB]"],
         }
         self.update_table(self.radar_cfg_table, radar_cfg_info, selected_radar)
+        self._bandwidth_limit_status(show_warning=False)
 
         fov_info = {
             "Azimuth Min [deg.]": radar_params["Azimuth Min [deg.]"],
@@ -2426,7 +2681,7 @@ class MainWindow(QMainWindow, QWidget):
             "Doppler Min [Hz]": radar_params["Doppler Min [Hz]"],
             "Doppler Max [Hz]": radar_params["Doppler Max [Hz]"],
         }
-        self.update_table(self.field_of_view_table, fov_info, selected_radar)
+        self.update_field_of_view_table(fov_info)
 
         display_info = {
             "Scatter Plot": bool(int(radar_params["GUI Monitor"][1])),
@@ -2447,6 +2702,39 @@ class MainWindow(QMainWindow, QWidget):
             "Azimuth Static Heatmap Grid Size": int(radar_params["Azimuth Static Heatmap Grid Size"]),
         }
         self.update_table(self.settings_table, settings_info, selected_radar)
+
+    def update_field_of_view_table(self, fov_info):
+        """Populate a compact four-row Min/Max editor for the radar field of view."""
+        table = self.field_of_view_table
+        groups = [
+            ("Azimuth [deg]", "Azimuth Min [deg.]", "Azimuth Max [deg.]", "Azimuth Limits"),
+            ("Elevation [deg]", "Elevation Min [deg.]", "Elevation Max [deg.]", "Elevation Limits"),
+            ("Range [m]", "Range Min [m]", "Range Max [m]", "Range Limits"),
+            ("Doppler [Hz]", "Doppler Min [Hz]", "Doppler Max [Hz]", "Doppler Limits"),
+        ]
+        table.setRowCount(len(groups))
+        for row, (label, min_key, max_key, callback_param) in enumerate(groups):
+            item = QTableWidgetItem(label)
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable & ~Qt.ItemIsSelectable)
+            table.setItem(row, 0, item)
+            for column, key, limit_type in ((1, min_key, "min"), (2, max_key, "max")):
+                value = fov_info.get(key, 0.0)
+                try:
+                    value_text = f"{float(value):.2f}"
+                except (TypeError, ValueError):
+                    value_text = str(value)
+                editor = QLineEdit(value_text)
+                editor.setAlignment(Qt.AlignCenter)
+                editor.setMinimumHeight(34)
+                editor.setPlaceholderText("Enter value")
+                editor.setToolTip(f"{label} {limit_type}")
+                editor.setStyleSheet("QLineEdit { border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 9px; background: white; }"
+                                     "QLineEdit:focus { border: 1px solid #4c83c3; }")
+                editor.editingFinished.connect(
+                    lambda p=callback_param, t=limit_type, e=editor: self.on_limit_edited(p, t, e.text())
+                )
+                table.setCellWidget(row, column, editor)
+            table.setRowHeight(row, 52)
 
     def update_table(self, table_id, table_info, selected_radar):
         # Clear existing data from the table
@@ -2568,7 +2856,10 @@ class MainWindow(QMainWindow, QWidget):
         self.radar_params['Number of RX Antennas'] = num_rx
         self.radar_params['Number of TX Antennas'] = num_tx
         self.radar_params['Cascading'] = 0  # Default to 0, modify if cascading logic is required
-        self.radar_params["Number of Loops"] = num_tx - 1
+        # Do not derive frameCfg.numLoops from the number of TX antennas.
+        # numLoops controls the number of repetitions in a frame and must be
+        # preserved when the antenna mask changes (num_tx - 1 would set it to
+        # zero for a 1-TX configuration, making standard frameCfg invalid).
         # Trigger the update for the 'channelCfg' command
         self.on_apply_changes_to_cfg_file_push_button(update_commands=['channelCfg', 'frameCfg'])
 

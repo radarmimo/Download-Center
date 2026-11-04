@@ -200,3 +200,8 @@
 - Added `Ramp End Time [us]` to the editable Chirp Configuration parameter-to-command mapping.
 - Editing this value now updates `profileCfg` field 4 and triggers the existing full configuration re-parse and dependent-parameter recalculation path.
 - Added regression tests to ensure the GUI edit mapping and `profileCfg` field mapping remain connected.
+
+### Bandwidth warning rendering fix
+- Replaced palette-only red cell highlighting with explicitly styled QLabel cell overlays for the read-only Scene Parameters bandwidth row. This avoids Qt stylesheet/platform-style overrides that could render the warning white.
+- Restores the normal table cells when the bandwidth returns within the selected device limit.
+- Added regression coverage for the stylesheet-resistant warning rendering path.
