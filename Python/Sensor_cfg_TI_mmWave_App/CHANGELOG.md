@@ -205,3 +205,12 @@
 - Replaced palette-only red cell highlighting with explicitly styled QLabel cell overlays for the read-only Scene Parameters bandwidth row. This avoids Qt stylesheet/platform-style overrides that could render the warning white.
 - Restores the normal table cells when the bandwidth returns within the selected device limit.
 - Added regression coverage for the stylesheet-resistant warning rendering path.
+
+
+## Experimental range FFT window CLI integration
+
+- Added an optional Radar Control setting to select Blackman, Hann, Hamming or rectangular range FFT windows.
+- Added target selection for all subframes or an individual subframe.
+- Enabling the setting inserts/updates `rangeWindow <subFrameIdx> <windowType>` immediately before `sensorStart`; disabling it removes the generated row.
+- Existing `rangeWindow` commands in loaded CFG files are reflected in the controls, and the command is retained by Save CFG.
+- The option is disabled by default because stock TI OOB firmware does not recognize this custom CLI command; matching MSS/DSS firmware support is required.

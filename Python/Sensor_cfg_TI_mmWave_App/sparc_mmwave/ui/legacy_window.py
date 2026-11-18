@@ -592,6 +592,39 @@ class MainWindow(QMainWindow, QWidget):
         self.command_table.setColumnWidth(0, 250)  # Set the width of the first column to 200 pixels
         self.command_table.setColumnWidth(1, 450)
         self.command_table.setHorizontalHeaderLabels(["Command", "Parameters"])
+
+        # Optional experimental firmware command. Keep disabled by default:
+        # stock TI OOB firmware does not recognize rangeWindow until the
+        # corresponding MSS/DSS firmware changes have been flashed.
+        self.range_window_enabled = QCheckBox("Enable firmware range-window override")
+        self.range_window_enabled.setToolTip(
+            "Adds the experimental rangeWindow CLI command to the CFG. "
+            "Enable only when the radar firmware has been updated to support it."
+        )
+        self.range_window_type = QComboBox()
+        self.range_window_type.addItem("Blackman", 0)
+        self.range_window_type.addItem("Hann", 1)
+        self.range_window_type.addItem("Hamming", 2)
+        self.range_window_type.addItem("Rectangular", 3)
+        self.range_window_type.setCurrentIndex(0)
+        self.range_window_subframe = QComboBox()
+        self.range_window_subframe.addItem("All subframes", -1)
+        for subframe in range(4):
+            self.range_window_subframe.addItem(f"Subframe {subframe}", subframe)
+        self.range_window_subframe.setCurrentIndex(0)
+        self.range_window_status = QLabel(
+            "Experimental command — requires matching DSS firmware support."
+        )
+        self.range_window_status.setWordWrap(True)
+        self.range_window_controls = QWidget()
+        range_window_layout = QHBoxLayout(self.range_window_controls)
+        range_window_layout.setContentsMargins(0, 4, 0, 4)
+        range_window_layout.addWidget(self.range_window_enabled)
+        range_window_layout.addWidget(QLabel("Window:"))
+        range_window_layout.addWidget(self.range_window_type)
+        range_window_layout.addWidget(QLabel("Target:"))
+        range_window_layout.addWidget(self.range_window_subframe)
+        range_window_layout.addWidget(self.range_window_status, 1)
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         self.tab_widget_main = QTabWidget()
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -722,7 +755,8 @@ class MainWindow(QMainWindow, QWidget):
         self.spacer_item = QSpacerItem(20, self.chirp_frame_height, QSizePolicy.Minimum, QSizePolicy.Expanding)
 
         self.cfg_layout_v = QVBoxLayout()
-        # self.cfg_layout_v.addWidget(self.browse_config_button)
+        # self.browse_config_button is part of the Radar Control toolbar.
+        self.cfg_layout_v.addWidget(self.range_window_controls)
         self.cfg_layout_v.addWidget(self.command_table)
 
         self.chirp_layout_v1 = QVBoxLayout()
@@ -921,9 +955,91 @@ class MainWindow(QMainWindow, QWidget):
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         self.apply_changes_to_cfg_file_push_button.clicked.connect(self.on_apply_changes_to_cfg_file_push_button)
         self.save_cfg_push_button.clicked.connect(self.save_updated_configuration)
+        self.range_window_enabled.toggled.connect(self._sync_range_window_command)
+        self.range_window_type.currentIndexChanged.connect(self._sync_range_window_command)
+        self.range_window_subframe.currentIndexChanged.connect(self._sync_range_window_command)
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         self.settings_table.cellChanged.connect(self.on_settings_table_cell_changed)
         # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+    def _load_range_window_controls_from_table(self):
+        """Reflect an existing rangeWindow CFG row in the optional controls."""
+        found = None
+        for row in range(self.command_table.rowCount()):
+            command_item = self.command_table.item(row, 0)
+            if command_item and command_item.text().strip().lower() == "rangewindow":
+                params_item = self.command_table.item(row, 1)
+                fields = params_item.text().split() if params_item else []
+                if len(fields) == 2:
+                    try:
+                        found = (int(fields[0]), int(fields[1]))
+                    except ValueError:
+                        found = None
+                break
+
+        self.range_window_enabled.blockSignals(True)
+        self.range_window_type.blockSignals(True)
+        self.range_window_subframe.blockSignals(True)
+        if found is None:
+            self.range_window_enabled.setChecked(False)
+        else:
+            subframe, window_type = found
+            subframe_index = self.range_window_subframe.findData(subframe)
+            window_index = self.range_window_type.findData(window_type)
+            if subframe_index >= 0 and window_index >= 0:
+                self.range_window_subframe.setCurrentIndex(subframe_index)
+                self.range_window_type.setCurrentIndex(window_index)
+                self.range_window_enabled.setChecked(True)
+            else:
+                self.range_window_enabled.setChecked(False)
+        self.range_window_subframe.blockSignals(False)
+        self.range_window_type.blockSignals(False)
+        self.range_window_enabled.blockSignals(False)
+
+    def _sync_range_window_command(self, *_):
+        """Insert/update/remove the optional rangeWindow command in the CFG table.
+
+        The command is kept immediately before sensorStart so that the selected
+        window is configured before frame processing begins. It remains an
+        ordinary CFG-table row and is therefore included in Save CFG.
+        """
+        table = self.command_table
+        matching_rows = []
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            if item and item.text().strip().lower() == "rangewindow":
+                matching_rows.append(row)
+
+        if not self.range_window_enabled.isChecked():
+            for row in reversed(matching_rows):
+                table.removeRow(row)
+            return
+
+        subframe = int(self.range_window_subframe.currentData())
+        window_type = int(self.range_window_type.currentData())
+        parameters = f"{subframe} {window_type}"
+
+        if matching_rows:
+            target_row = matching_rows[0]
+            table.item(target_row, 1).setText(parameters)
+            for row in reversed(matching_rows[1:]):
+                table.removeRow(row)
+        else:
+            start_row = table.rowCount()
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item and item.text().strip().lower() == "sensorstart":
+                    start_row = row
+                    break
+            table.insertRow(start_row)
+            table.setItem(start_row, 0, QTableWidgetItem("rangeWindow"))
+            table.setItem(start_row, 1, QTableWidgetItem(parameters))
+
+        if hasattr(self, "workflow_status"):
+            self.workflow_status.setText(
+                f"Added rangeWindow {parameters} to the CFG. "
+                "The flashed firmware must implement this command."
+            )
 
     def on_settings_table_cell_changed(self, row, column):
         # Get the edited item
@@ -2308,7 +2424,11 @@ class MainWindow(QMainWindow, QWidget):
                     command_tuples.append((parts[0], parts[1]))  # Command and parameters
 
             # Use update_specified_table to display command_tuples in command_table
+            self.range_window_enabled.blockSignals(True)
+            self.range_window_enabled.setChecked(False)
+            self.range_window_enabled.blockSignals(False)
             self.update_specified_table("command_table", command_tuples)
+            self._load_range_window_controls_from_table()
 
             # self.commands = commands1
             # self.parse_commands_information(self.commands, self.radar_params)
@@ -2333,8 +2453,14 @@ class MainWindow(QMainWindow, QWidget):
         options |= QFileDialog.ReadOnly
 
         selected_radar = self.select_radar_combo_box.currentText()
+        # A new preset replaces the command table; do not carry an override
+        # selected for a previously loaded configuration into the new preset.
+        self.range_window_enabled.blockSignals(True)
+        self.range_window_enabled.setChecked(False)
+        self.range_window_enabled.blockSignals(False)
         # Use update_specified_table to display command_tuples in command_table
         self.update_specified_table("command_table", command_tuples)
+        self._load_range_window_controls_from_table()
         self.parse_commands_information("command_table", self.radar_params)
         self.set_tables_information(self.radar_params, selected_radar)
         self.connect_button.setEnabled(True)

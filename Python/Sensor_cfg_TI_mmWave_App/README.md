@@ -163,3 +163,20 @@ Before sending a standard-frame configuration, SPARC checks profile timing, ADC 
 
 ### Range-Doppler and Range-Azimuth output
 Enable the corresponding Range-Doppler Heat Map and Range Azimuth Heat Map options in Radar Control → Display, then send the configuration again. The `guiMonitor` flags control whether the firmware transmits these TLVs. Enabling the options does not retroactively change a configuration already running. The application now validates TLV dimensions against the configured FFT and antenna dimensions and logs payload-size mismatches. Enabling heatmaps no longer silently changes the frame periodicity to 1000 ms.
+
+
+## Experimental firmware range-window selection
+
+Radar Control includes an optional **Enable firmware range-window override**
+control. When enabled, SPARC inserts `rangeWindow <subFrameIdx> <windowType>`
+into the editable CFG command table immediately before `sensorStart`. The
+command is saved with the CFG and is transmitted through the normal command
+sequence. Window values are 0=Blackman, 1=Hann, 2=Hamming and 3=Rectangular;
+the target can be all subframes (-1) or an individual subframe (0–3).
+
+This is an application-side integration only. The `rangeWindow` command is
+custom and is not part of the stock TI OOB CLI. Enable it only after flashing
+firmware whose MSS CLI parser and DSS Object Detection DPC implement the
+matching command. The override is disabled by default to preserve compatibility
+with unmodified TI firmware. A UART `SENT` indication confirms transmission,
+not firmware acceptance.
